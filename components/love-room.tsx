@@ -64,6 +64,7 @@ export function LoveRoom({ roomId, onBack }: Props) {
   const [text, setText] = useState("");
   const [cameraOpen, setCameraOpen] = useState(false);
   const [isReady, setIsReady] = useState(false);
+  const [authReady, setAuthReady] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [authError, setAuthError] = useState("");
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -95,7 +96,10 @@ export function LoveRoom({ roomId, onBack }: Props) {
 
   useEffect(() => {
     if (!auth) return;
-    return onAuthStateChanged(auth, setUser);
+    return onAuthStateChanged(auth, (nextUser) => {
+      setUser(nextUser);
+      setAuthReady(true);
+    });
   }, []);
 
   useEffect(() => {
@@ -116,52 +120,69 @@ export function LoveRoom({ roomId, onBack }: Props) {
       return;
     }
 
-    const roomRef = doc(db, "rooms", roomId);
-    getDoc(roomRef).then((snap) => {
-      if (!snap.exists()) {
-        setDoc(roomRef, { ...defaultRoom, id: roomId, updatedAt: serverTimestamp() });
-      }
-    });
-
-    const unsubRoom = onSnapshot(roomRef, (snap) => {
-      if (snap.exists()) setRoom(snap.data() as SharedRoom);
+    if (!authReady) return;
+    if (!user) {
       setIsReady(true);
-    });
+      return;
+    }
+
+    const roomRef = doc(db, "rooms", roomId);
+    getDoc(roomRef).catch((error) => setAuthError(error instanceof Error ? error.message : "Could not open this room."));
+
+    const unsubRoom = onSnapshot(
+      roomRef,
+      (snap) => {
+        if (snap.exists()) setRoom(snap.data() as SharedRoom);
+        setIsReady(true);
+      },
+      (error) => {
+        setAuthError(error.message);
+        setIsReady(true);
+      }
+    );
 
     const messagesRef = collection(db, "rooms", roomId, "messages");
     const q = query(messagesRef, orderBy("createdAt", "desc"), limit(30));
-    const unsubMessages = onSnapshot(q, (snap) => {
-      setOlderCursor(snap.docs.length === 30 ? snap.docs.at(-1) ?? null : null);
-      const latest = snap.docs
-        .map((item) => {
-          const data = item.data();
-          return {
-            id: item.id,
-            roomId,
-            sender: data.sender,
-            senderId: data.senderId,
-            ownerUid: data.ownerUid,
-            edited: data.edited,
-            kind: data.kind,
-            text: data.text,
-            mediaUrl: data.mediaUrl,
-            createdAt: data.createdAt?.toMillis?.() ?? Date.now()
-          } as LoveMessage;
-        })
-        .reverse();
-      setMessages((current) => mergeMessages(current.filter((item) => !latest.some((next) => next.id === item.id)), latest));
-    });
+    const unsubMessages = onSnapshot(
+      q,
+      (snap) => {
+        setOlderCursor(snap.docs.length === 30 ? snap.docs.at(-1) ?? null : null);
+        const latest = snap.docs
+          .map((item) => {
+            const data = item.data();
+            return {
+              id: item.id,
+              roomId,
+              sender: data.sender,
+              senderId: data.senderId,
+              ownerUid: data.ownerUid,
+              edited: data.edited,
+              kind: data.kind,
+              text: data.text,
+              mediaUrl: data.mediaUrl,
+              createdAt: data.createdAt?.toMillis?.() ?? Date.now()
+            } as LoveMessage;
+          })
+          .reverse();
+        setMessages((current) => mergeMessages(current.filter((item) => !latest.some((next) => next.id === item.id)), latest));
+      },
+      (error) => setAuthError(error.message)
+    );
 
-    const unsubParticipants = onSnapshot(collection(db, "rooms", roomId, "participants"), (snap) => {
-      setParticipants(snap.docs.map((item) => ({ id: item.id, ...item.data() }) as Participant));
-    });
+    const unsubParticipants = onSnapshot(
+      collection(db, "rooms", roomId, "participants"),
+      (snap) => {
+        setParticipants(snap.docs.map((item) => ({ id: item.id, ...item.data() }) as Participant));
+      },
+      (error) => setAuthError(error.message)
+    );
 
     return () => {
       unsubRoom();
       unsubMessages();
       unsubParticipants();
     };
-  }, [roomId]);
+  }, [authReady, roomId, user]);
 
   useEffect(() => {
     if (!cameraOpen || !streamRef.current || !videoRef.current) return;
@@ -270,7 +291,7 @@ export function LoveRoom({ roomId, onBack }: Props) {
   }
 
   async function updateProfile(person: "owner" | "peer", field: keyof Profile, value: string) {
-    if (!canManageRoom) return;
+    if (!isMember) return;
     const nextRoom = {
       ...room,
       profiles: {
@@ -491,7 +512,7 @@ export function LoveRoom({ roomId, onBack }: Props) {
                 profile={currentProfile}
                 participant={participants.find((item) => item.id === actorId)}
                 active
-                onChange={canManageRoom ? (field, value) => updateProfile(isOwner ? "owner" : "peer", field, value) : undefined}
+                onChange={isMember ? (field, value) => updateProfile(isOwner ? "owner" : "peer", field, value) : undefined}
               />
               <ProfileCard title="Other user" profile={otherProfile} participant={participants.find((item) => item.id === otherId)} />
             </>

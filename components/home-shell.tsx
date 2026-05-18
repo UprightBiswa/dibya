@@ -5,7 +5,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { GoogleAuthProvider, onAuthStateChanged, signInWithPopup, signOut, type User } from "firebase/auth";
-import { collection, deleteDoc, doc, getDocs, onSnapshot, query, serverTimestamp, setDoc, updateDoc, where, writeBatch } from "firebase/firestore";
+import { collection, deleteDoc, doc, getDoc, getDocs, onSnapshot, query, serverTimestamp, setDoc, updateDoc, where, writeBatch } from "firebase/firestore";
 import {
   Bell,
   Check,
@@ -43,10 +43,15 @@ function slugify(value: string) {
   );
 }
 
+function pairId(a: string, b: string) {
+  return [a, b].sort().join("_");
+}
+
 export function HomeShell() {
   const params = useSearchParams();
   const router = useRouter();
   const roomId = params.get("room");
+  const inviteId = params.get("invite");
   const [user, setUser] = useState<User | null>(null);
   const [rooms, setRooms] = useState<SharedRoom[]>([]);
   const [search, setSearch] = useState("");
@@ -59,6 +64,7 @@ export function HomeShell() {
   const [foundUser, setFoundUser] = useState<AppUser | null>(null);
   const [allUsers, setAllUsers] = useState<AppUser[]>([]);
   const [invites, setInvites] = useState<ChatInvite[]>([]);
+  const [sentInvites, setSentInvites] = useState<ChatInvite[]>([]);
   const [authError, setAuthError] = useState("");
   const [notice, setNotice] = useState("");
   const { activeTab, setActiveTab, soundEnabled, toggleSound, playTone } = useAppStore();
@@ -121,6 +127,10 @@ export function HomeShell() {
       setInvites(next);
     });
 
+    const unsubSentInvites = onSnapshot(query(collection(db, "invites"), where("fromUid", "==", user.uid)), (snap) => {
+      setSentInvites(snap.docs.map((item) => ({ id: item.id, ...item.data() }) as ChatInvite));
+    });
+
     const unsubUsers = onSnapshot(collection(db, "users"), (snap) => {
       setAllUsers(snap.docs.map((item) => item.data() as AppUser).filter((item) => item.uid !== user.uid));
     });
@@ -129,9 +139,25 @@ export function HomeShell() {
       unsubRooms();
       unsubProfile();
       unsubInvites();
+      unsubSentInvites();
       unsubUsers();
     };
   }, [invites.length, playTone, user]);
+
+  useEffect(() => {
+    if (!db || !user || !profile || !inviteId) return;
+    getDoc(doc(db, "invites", inviteId)).then(async (snap) => {
+      if (!snap.exists()) return;
+      const invite = { id: snap.id, ...snap.data() } as ChatInvite;
+      if (invite.status === "accepted" && invite.roomId) {
+        router.replace(`/?room=${invite.roomId}`);
+        return;
+      }
+      if (invite.status === "pending" && invite.toUid === user.uid) {
+        await acceptInvite(invite);
+      }
+    });
+  }, [inviteId, profile, router, user]);
 
   const appUrl = typeof window === "undefined" ? "" : window.location.origin;
   const filteredRooms = rooms.filter((room) => roomTitle(room, user?.uid).toLowerCase().includes(search.toLowerCase()));
@@ -161,6 +187,23 @@ export function HomeShell() {
     } else {
       await navigator.clipboard.writeText(`${shareText} ${appUrl}`);
       setNotice("App link copied.");
+    }
+    playTone("success");
+  }
+
+  async function shareRequest(targetUser: AppUser, existingInvite?: ChatInvite) {
+    if (!db || !user || !profile) return;
+    const id = pairId(user.uid, targetUser.uid);
+    if (!existingInvite) {
+      await sendInviteTo(targetUser);
+    }
+    const requestUrl = `${appUrl}/?invite=${id}`;
+    const shareText = `${profile.name || profile.username} sent you a HeartLink request. Open this link to accept and start chatting.`;
+    if (navigator.share) {
+      await navigator.share({ title: "HeartLink request", text: shareText, url: requestUrl });
+    } else {
+      await navigator.clipboard.writeText(`${shareText} ${requestUrl}`);
+      setNotice("Request accept link copied.");
     }
     playTone("success");
   }
@@ -212,7 +255,13 @@ export function HomeShell() {
 
   async function sendInviteTo(targetUser: AppUser) {
     if (!db || !user || !profile) return;
-    const id = `${user.uid}_${targetUser.uid}`;
+    const roomIdForPair = pairId(user.uid, targetUser.uid);
+    const existingRoom = await getDoc(doc(db, "rooms", roomIdForPair));
+    if (existingRoom.exists()) {
+      router.push(`/?room=${roomIdForPair}`);
+      return;
+    }
+    const id = roomIdForPair;
     await setDoc(doc(db, "invites", id), {
       id,
       fromUid: user.uid,
@@ -224,7 +273,8 @@ export function HomeShell() {
       toUsername: targetUser.username,
       toPhotoUrl: targetUser.photoUrl,
       status: "pending",
-      createdAt: Date.now()
+      createdAt: Date.now(),
+      updatedAt: Date.now()
     });
     setNotice(`Request sent to ${targetUser.name || targetUser.username}.`);
     playTone("send");
@@ -232,7 +282,7 @@ export function HomeShell() {
 
   async function acceptInvite(invite: ChatInvite) {
     if (!db || !user || !profile) return;
-    const id = [invite.fromUid, invite.toUid].sort().join("_");
+    const id = pairId(invite.fromUid, invite.toUid);
     await setDoc(doc(db, "rooms", id), {
       ...defaultRoom,
       id,
@@ -249,14 +299,14 @@ export function HomeShell() {
         peer: { name: profile.name || invite.toName, role: `@${profile.username || invite.toUsername || "user"}`, bio: profile.bio || "", photoUrl: profile.photoUrl || "" }
       }
     });
-    await updateDoc(doc(db, "invites", invite.id), { status: "accepted", roomId: id, acceptedAt: serverTimestamp() });
+    await updateDoc(doc(db, "invites", invite.id), { status: "accepted", roomId: id, acceptedAt: serverTimestamp(), updatedAt: Date.now() });
     playTone("success");
     router.push(`/?room=${id}`);
   }
 
   async function declineInvite(invite: ChatInvite) {
     if (!db) return;
-    await updateDoc(doc(db, "invites", invite.id), { status: "declined", declinedAt: serverTimestamp() });
+    await updateDoc(doc(db, "invites", invite.id), { status: "declined", declinedAt: serverTimestamp(), updatedAt: Date.now() });
     playTone("tap");
   }
 
@@ -339,7 +389,7 @@ export function HomeShell() {
             {[
               { id: "chats", label: "Chats", icon: MessageCircle },
               { id: "users", label: "Users", icon: Users },
-              { id: "requests", label: "Req", icon: Inbox, count: invites.length },
+              { id: "requests", label: "Req", icon: Inbox, count: invites.length + sentInvites.filter((item) => item.status === "declined").length },
               { id: "profile", label: "Me", icon: ShieldCheck }
             ].map((tab) => (
               <button
@@ -377,10 +427,23 @@ export function HomeShell() {
                   <input value={findUsername} onChange={(event) => setFindUsername(event.target.value)} placeholder="Find username" className="min-w-0 flex-1 rounded-md border border-ink/10 px-3 py-2 text-sm font-bold" />
                   <button className="rounded-md bg-ink px-3 py-2 text-xs font-bold text-white">Find</button>
                 </form>
-                {foundUser ? <UserRow user={foundUser} action="Send" onAction={() => sendInviteTo(foundUser)} /> : null}
+                {foundUser ? (
+                  <UserRow
+                    user={foundUser}
+                    status={relationStatus(foundUser.uid, rooms, sentInvites, invites, user.uid)}
+                    onAction={() => sendInviteTo(foundUser)}
+                    onShare={() => shareRequest(foundUser, sentInvites.find((invite) => invite.id === pairId(user.uid, foundUser.uid)))}
+                  />
+                ) : null}
                 {filteredUsers.length === 0 ? <EmptyState title="No users found" text="Share the app with someone. After they login, they show here." /> : null}
                 {filteredUsers.map((item) => (
-                  <UserRow key={item.uid} user={item} action="Request" onAction={() => sendInviteTo(item)} />
+                  <UserRow
+                    key={item.uid}
+                    user={item}
+                    status={relationStatus(item.uid, rooms, sentInvites, invites, user.uid)}
+                    onAction={() => sendInviteTo(item)}
+                    onShare={() => shareRequest(item, sentInvites.find((invite) => invite.id === pairId(user.uid, item.uid)))}
+                  />
                 ))}
               </>
             ) : null}
@@ -407,6 +470,15 @@ export function HomeShell() {
                         Deny
                       </button>
                     </div>
+                  </div>
+                ))}
+                {sentInvites.filter((invite) => invite.status === "declined").map((invite) => (
+                  <div key={invite.id} className="rounded-lg bg-white/75 p-3">
+                    <p className="text-sm font-black text-ink">{invite.toName} denied your request.</p>
+                    <p className="mt-1 text-xs leading-5 text-ink/55">You can send a new request later.</p>
+                    <button onClick={() => updateDoc(doc(db!, "invites", invite.id), { status: "pending", updatedAt: Date.now() })} className="mt-3 w-full rounded-md bg-ink px-3 py-2 text-xs font-bold text-white">
+                      Send again
+                    </button>
                   </div>
                 ))}
               </>
@@ -469,6 +541,15 @@ function otherProfile(room: SharedRoom, uid?: string) {
   return uid && room.peerUid === uid ? room.profiles.owner : room.profiles.peer;
 }
 
+function relationStatus(targetUid: string, rooms: SharedRoom[], sent: ChatInvite[], incoming: ChatInvite[], currentUid: string) {
+  if (rooms.some((room) => room.participantUids?.includes(targetUid))) return "connected";
+  const id = pairId(currentUid, targetUid);
+  const invite = sent.find((item) => item.id === id) || incoming.find((item) => item.id === id);
+  if (!invite) return "none";
+  if (invite.status === "pending") return invite.fromUid === currentUid ? "sent" : "incoming";
+  return invite.status;
+}
+
 function initials(name: string) {
   return name
     .split(/\s+/)
@@ -512,7 +593,18 @@ function EmptyState({ title, text }: { title: string; text: string }) {
   );
 }
 
-function UserRow({ user, action, onAction }: { user: AppUser; action: string; onAction: () => void }) {
+function UserRow({
+  user,
+  status,
+  onAction,
+  onShare
+}: {
+  user: AppUser;
+  status: "none" | "connected" | "sent" | "incoming" | "accepted" | "declined";
+  onAction: () => void;
+  onShare: () => void;
+}) {
+  const actionLabel = status === "connected" || status === "accepted" ? "Connected" : status === "sent" ? "Sent" : status === "declined" ? "Send again" : "Request";
   return (
     <div className="rounded-lg bg-white/75 p-3">
       <div className="flex items-center gap-3">
@@ -522,10 +614,19 @@ function UserRow({ user, action, onAction }: { user: AppUser; action: string; on
           <p className="truncate text-xs text-ink/55">@{user.username}</p>
           {user.bio ? <p className="mt-1 line-clamp-2 text-xs leading-5 text-ink/65">{user.bio}</p> : null}
         </div>
-        <button onClick={onAction} className="flex items-center gap-1 rounded-md bg-ink px-3 py-2 text-xs font-bold text-white">
+        <button
+          onClick={onAction}
+          disabled={status === "connected" || status === "accepted" || status === "sent"}
+          className="flex items-center gap-1 rounded-md bg-ink px-3 py-2 text-xs font-bold text-white disabled:opacity-55"
+        >
           <Send className="h-3 w-3" />
-          {action}
+          {actionLabel}
         </button>
+        {status !== "connected" && status !== "accepted" ? (
+          <button onClick={onShare} className="rounded-md border border-ink/10 bg-white px-3 py-2 text-xs font-bold text-ink">
+            Link
+          </button>
+        ) : null}
       </div>
     </div>
   );
