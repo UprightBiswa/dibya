@@ -1,4 +1,4 @@
-export type ThemeName = "rose" | "mint" | "sunset" | "night";
+export type ThemeName = "rose" | "mint" | "sunset" | "night" | "ocean" | "mono";
 
 export type Profile = {
   name: string;
@@ -10,8 +10,13 @@ export type Profile = {
 export type Participant = Profile & {
   id: string;
   joinedAt: number;
+  lastActiveAt?: number;
+  uid?: string;
+  username?: string;
   locationText?: string;
+  locationUpdatedAt?: number;
   deviceText?: string;
+  deviceUpdatedAt?: number;
 };
 
 export type AppUser = Profile & {
@@ -21,14 +26,19 @@ export type AppUser = Profile & {
   usernameLower: string;
   displayName: string;
   createdAt?: number;
+  lastActiveAt?: number;
 };
 
 export type ChatInvite = {
   id: string;
   fromUid: string;
   fromName: string;
+  fromUsername?: string;
+  fromPhotoUrl?: string;
   toUid: string;
   toName: string;
+  toUsername?: string;
+  toPhotoUrl?: string;
   status: "pending" | "accepted" | "declined";
   roomId?: string;
   createdAt: number;
@@ -43,6 +53,10 @@ export type SharedRoom = {
   partnerName?: string;
   deleted?: boolean;
   createdAt?: number;
+  updatedAt?: number;
+  lastMessage?: string;
+  lastMessageAt?: number;
+  gameScore?: Record<string, number>;
   theme: ThemeName;
   quoteOfDay: string;
   profiles: {

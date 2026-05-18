@@ -4,7 +4,9 @@ export const themes: Record<ThemeName, { label: string; primary: string; seconda
   rose: { label: "Rose", primary: "#e84d74", secondary: "#11a37f", bg: "#fff7f8" },
   mint: { label: "Mint", primary: "#0f9f86", secondary: "#f9738c", bg: "#f4fffb" },
   sunset: { label: "Sunset", primary: "#e6583f", secondary: "#7c3aed", bg: "#fff8ed" },
-  night: { label: "Night", primary: "#7c3aed", secondary: "#22c55e", bg: "#f7f5ff" }
+  night: { label: "Night", primary: "#7c3aed", secondary: "#22c55e", bg: "#f7f5ff" },
+  ocean: { label: "Ocean", primary: "#0f766e", secondary: "#2563eb", bg: "#eefcff" },
+  mono: { label: "Mono", primary: "#111827", secondary: "#64748b", bg: "#f8fafc" }
 };
 
 export const loveQuotes = [

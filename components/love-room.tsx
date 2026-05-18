@@ -2,10 +2,9 @@
 
 import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import Image from "next/image";
-import { onAuthStateChanged, type User } from "firebase/auth";
+import { GoogleAuthProvider, onAuthStateChanged, signInWithPopup, type User } from "firebase/auth";
 import {
   Camera,
-  Copy,
   Edit3,
   Gift,
   Heart,
@@ -36,11 +35,13 @@ import {
   query,
   serverTimestamp,
   setDoc,
-  startAfter
+  startAfter,
+  updateDoc
 } from "firebase/firestore";
 import { auth, db, hasFirebaseConfig } from "@/lib/firebase";
 import { defaultRoom, gifts, loveQuotes, themes } from "@/lib/room-data";
 import { readLocalMessages, readLocalRoom, writeLocalMessages, writeLocalRoom } from "@/lib/local-store";
+import { useAppStore } from "@/lib/app-store";
 import type { LoveMessage, Participant, Profile, SharedRoom, ThemeName } from "@/lib/types";
 
 type Props = {
@@ -62,28 +63,35 @@ export function LoveRoom({ roomId, onBack }: Props) {
   const [participants, setParticipants] = useState<Participant[]>([]);
   const [text, setText] = useState("");
   const [cameraOpen, setCameraOpen] = useState(false);
-  const [copied, setCopied] = useState(false);
   const [isReady, setIsReady] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [authError, setAuthError] = useState("");
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const clientIdRef = useRef("");
+  const { setSelectedTheme, playTone } = useAppStore();
 
   const isOwner = Boolean(user && room.ownerUid && user.uid === room.ownerUid);
   const isPeer = Boolean(user && room.peerUid && user.uid === room.peerUid);
   const isLegacyRoom = !room.ownerUid;
+  const isMember = isLegacyRoom || isOwner || isPeer;
   const currentProfile = isOwner || isLegacyRoom ? room.profiles.owner : isPeer ? room.profiles.peer : { ...room.profiles.peer, name: guestName || room.profiles.peer.name };
+  const otherProfile = isOwner || isLegacyRoom ? room.profiles.peer : room.profiles.owner;
   const receiver = isOwner || isLegacyRoom ? "peer" : "owner";
   const theme = themes[room.theme];
-  const roomUrl = typeof window === "undefined" ? "" : `${window.location.origin}/?room=${roomId}`;
   const canManageRoom = isOwner || isLegacyRoom;
+  const actorId = user?.uid || clientIdRef.current;
+  const myScore = room.gameScore?.[actorId] ?? 0;
+  const otherId = isOwner ? room.peerUid : room.ownerUid;
+  const otherScore = otherId ? room.gameScore?.[otherId] ?? 0 : 0;
 
   useEffect(() => {
     document.documentElement.style.setProperty("--theme-primary", theme.primary);
     document.documentElement.style.setProperty("--theme-secondary", theme.secondary);
     document.documentElement.style.setProperty("--theme-bg", theme.bg);
-  }, [theme]);
+    setSelectedTheme(room.theme);
+  }, [room.theme, setSelectedTheme, theme]);
 
   useEffect(() => {
     if (!auth) return;
@@ -169,6 +177,25 @@ export function LoveRoom({ roomId, onBack }: Props) {
     return () => stopCamera();
   }, []);
 
+  useEffect(() => {
+    if (!db || !user || !isMember || !isReady) return;
+    setDoc(
+      doc(db, "rooms", roomId, "participants", user.uid),
+      {
+        id: user.uid,
+        uid: user.uid,
+        name: currentProfile.name || user.displayName || "Member",
+        username: currentProfile.role?.replace("@", "") || "",
+        role: currentProfile.role || "Member",
+        bio: currentProfile.bio || "",
+        photoUrl: currentProfile.photoUrl || user.photoURL || "",
+        joinedAt: Date.now(),
+        lastActiveAt: Date.now()
+      },
+      { merge: true }
+    );
+  }, [currentProfile, isMember, isReady, roomId, user]);
+
   const roomIntro = useMemo(() => {
     return `${room.profiles.owner.name} and ${room.profiles.peer.name} share this private chat.`;
   }, [room.profiles]);
@@ -188,8 +215,8 @@ export function LoveRoom({ roomId, onBack }: Props) {
       id: crypto.randomUUID(),
       roomId,
       sender: currentProfile.name,
-      senderId: clientIdRef.current,
-      ownerUid: isOwner ? user?.uid : "",
+      senderId: actorId,
+      ownerUid: user?.uid ?? "",
       createdAt: Date.now(),
       ...input
     };
@@ -197,13 +224,23 @@ export function LoveRoom({ roomId, onBack }: Props) {
     if (hasFirebaseConfig && db) {
       await addDoc(collection(db, "rooms", roomId, "messages"), {
         sender: message.sender,
-        senderId: message.senderId ?? "",
-        ownerUid: message.ownerUid ?? "",
+        senderId: actorId,
+        ownerUid: user?.uid ?? "",
         kind: message.kind,
         text: message.text,
         mediaUrl: message.mediaUrl ?? "",
         createdAt: serverTimestamp()
       });
+      await setDoc(
+        doc(db, "rooms", roomId),
+        {
+          lastMessage: input.kind === "photo" || input.kind === "snap" ? "Shared a photo" : input.text.slice(0, 90),
+          lastMessageAt: Date.now(),
+          updatedAt: Date.now()
+        },
+        { merge: true }
+      );
+      playTone(input.kind === "text" ? "send" : "success");
     } else {
       const next = [...messages, message].slice(-80);
       setMessages(next);
@@ -246,17 +283,12 @@ export function LoveRoom({ roomId, onBack }: Props) {
 
   async function changeTheme(nextTheme: ThemeName) {
     await saveRoom({ ...room, theme: nextTheme });
+    playTone("tap");
   }
 
   async function changeQuote() {
     const index = (loveQuotes.indexOf(room.quoteOfDay) + 1) % loveQuotes.length;
     await saveRoom({ ...room, quoteOfDay: loveQuotes[index] });
-  }
-
-  async function copyLink() {
-    await navigator.clipboard.writeText(roomUrl);
-    setCopied(true);
-    window.setTimeout(() => setCopied(false), 1600);
   }
 
   async function startCamera() {
@@ -347,7 +379,8 @@ export function LoveRoom({ roomId, onBack }: Props) {
             accuracy
           )}m. ${address}`
         });
-        await saveParticipant({ locationText: `${latitude.toFixed(6)}, ${longitude.toFixed(6)}. ${address}` });
+        await saveParticipant({ locationText: `${latitude.toFixed(6)}, ${longitude.toFixed(6)}. ${address}`, locationUpdatedAt: Date.now() });
+        playTone("success");
       },
       async () => {
         await sendMessage({ kind: "location", text: "Location permission was not allowed." });
@@ -364,24 +397,45 @@ export function LoveRoom({ roomId, onBack }: Props) {
       `Online: ${navigator.onLine ? "yes" : "no"}`
     ].join("\n");
     await sendMessage({ kind: "device", text: `Shared device details with permission:\n${details}` });
-    await saveParticipant({ deviceText: details });
+    await saveParticipant({ deviceText: details, deviceUpdatedAt: Date.now() });
+    playTone("success");
   }
 
   async function saveParticipant(extra: Partial<Participant> = {}) {
-    if (!db || !clientIdRef.current) return;
+    if (!db || !actorId) return;
     await setDoc(
-      doc(db, "rooms", roomId, "participants", clientIdRef.current),
+      doc(db, "rooms", roomId, "participants", actorId),
       {
-        id: clientIdRef.current,
-        name: guestName || currentProfile.name || "Guest",
-        role: "Invited guest",
-        bio: guestBio,
-        photoUrl: guestPhotoUrl,
+        id: actorId,
+        uid: user?.uid || "",
+        name: user ? currentProfile.name : guestName || currentProfile.name || "Guest",
+        role: user ? currentProfile.role : "Guest",
+        bio: user ? currentProfile.bio : guestBio,
+        photoUrl: user ? currentProfile.photoUrl : guestPhotoUrl,
         joinedAt: Date.now(),
+        lastActiveAt: Date.now(),
         ...extra
       },
       { merge: true }
     );
+  }
+
+  async function login() {
+    if (!auth) return;
+    setAuthError("");
+    try {
+      const provider = new GoogleAuthProvider();
+      provider.setCustomParameters({ prompt: "select_account" });
+      await signInWithPopup(auth, provider);
+    } catch (error) {
+      setAuthError(error instanceof Error ? error.message : "Google login failed.");
+    }
+  }
+
+  async function tapGame() {
+    const nextScore = myScore + 1;
+    await saveRoom({ ...room, gameScore: { ...(room.gameScore || {}), [actorId]: nextScore } });
+    await sendMessage({ kind: "game", text: `${currentProfile.name} tapped the room game. Score ${nextScore}.` });
   }
 
   if (!isReady) {
@@ -392,14 +446,30 @@ export function LoveRoom({ roomId, onBack }: Props) {
     );
   }
 
+  if (room.ownerUid && !user) {
+    return (
+      <main className="flex min-h-screen items-center justify-center p-6">
+        <div className="glass w-full max-w-md rounded-lg p-5 text-center shadow-soft">
+          <Heart className="mx-auto h-10 w-10 fill-[color:var(--theme-primary)] text-[color:var(--theme-primary)]" />
+          <h1 className="mt-3 text-2xl font-black text-ink">Login to open this chat</h1>
+          <p className="mt-2 text-sm leading-6 text-ink/60">HeartLink rooms are for two logged-in users after a request is accepted.</p>
+          <button onClick={login} className="mt-5 w-full rounded-md bg-ink px-4 py-3 text-sm font-bold text-white">
+            Continue with Google
+          </button>
+          {authError ? <p className="mt-3 rounded-md bg-red-50 p-3 text-sm font-bold text-red-700">{authError}</p> : null}
+        </div>
+      </main>
+    );
+  }
+
   return (
     <main className="min-h-screen px-3 py-3 sm:px-5 lg:px-6">
-      <section className="mx-auto grid max-w-7xl gap-3 lg:h-[calc(100vh-1.5rem)] lg:grid-cols-[300px_minmax(0,1fr)_290px]">
+      <section className="mx-auto grid max-w-7xl gap-3 lg:h-[calc(100vh-1.5rem)] lg:grid-cols-[310px_minmax(0,1fr)_310px]">
         <aside className="space-y-4">
           <div className="glass rounded-lg p-5 shadow-soft">
             <div className="flex items-start justify-between gap-3">
               <div>
-                <p className="text-xs font-bold uppercase tracking-wider text-[color:var(--theme-secondary)]">Private chat</p>
+                <p className="text-xs font-bold uppercase tracking-wider text-[color:var(--theme-secondary)]">Active chat</p>
                 <h1 className="mt-1 text-3xl font-black text-ink">{room.partnerName || room.profiles.peer.name}</h1>
               </div>
               <Heart className="h-8 w-8 fill-[color:var(--theme-primary)] text-[color:var(--theme-primary)]" />
@@ -408,23 +478,22 @@ export function LoveRoom({ roomId, onBack }: Props) {
             <div className="mt-4 grid gap-2">
               {onBack ? (
                 <button onClick={onBack} className="rounded-md border border-ink/10 bg-white px-4 py-3 text-sm font-bold text-ink">
-                  My rooms
+                  Back to dashboard
                 </button>
               ) : null}
-              <button onClick={copyLink} className="flex w-full items-center justify-center gap-2 rounded-md bg-ink px-4 py-3 text-sm font-bold text-white">
-                <Copy className="h-4 w-4" />
-                {copied ? "Link copied" : "Copy invite link"}
-              </button>
             </div>
-            <p className="mt-3 text-xs leading-5 text-ink/55">
-              Anyone with this link can open the room, so share it only with the right person.
-            </p>
           </div>
 
-          {canManageRoom ? (
+          {isMember ? (
             <>
-              <ProfileCard title="Your" profile={room.profiles.owner} onChange={(field, value) => updateProfile("owner", field, value)} />
-              <ProfileCard title="Guest" profile={room.profiles.peer} onChange={(field, value) => updateProfile("peer", field, value)} />
+              <ProfileCard
+                title="You"
+                profile={currentProfile}
+                participant={participants.find((item) => item.id === actorId)}
+                active
+                onChange={canManageRoom ? (field, value) => updateProfile(isOwner ? "owner" : "peer", field, value) : undefined}
+              />
+              <ProfileCard title="Other user" profile={otherProfile} participant={participants.find((item) => item.id === otherId)} />
             </>
           ) : isPeer ? null : (
             <div className="glass rounded-lg p-4 shadow-soft">
@@ -501,7 +570,7 @@ export function LoveRoom({ roomId, onBack }: Props) {
                   key={message.id}
                   message={message}
                   mine={message.senderId === clientIdRef.current || message.sender === currentProfile.name}
-                  canEdit={canManageRoom || message.senderId === clientIdRef.current}
+                  canEdit={message.senderId === actorId}
                   onEdit={editMessage}
                   onDelete={deleteMessage}
                 />
@@ -541,8 +610,14 @@ export function LoveRoom({ roomId, onBack }: Props) {
               <UserRound className="h-4 w-4" />
               You are chatting as
             </p>
-            <p className="rounded-md bg-white px-3 py-3 text-sm font-black text-ink">{currentProfile.name || "Guest"}</p>
-            {!canManageRoom ? <p className="mt-2 text-xs leading-5 text-ink/55">Location and device info are shared only if you tap the buttons below.</p> : null}
+            <div className="flex items-center gap-3 rounded-md bg-white px-3 py-3">
+              <Avatar name={currentProfile.name || "Me"} photoUrl={currentProfile.photoUrl} />
+              <div className="min-w-0">
+                <p className="truncate text-sm font-black text-ink">{currentProfile.name || "Member"}</p>
+                <p className="truncate text-xs text-ink/55">{isMember ? "Logged-in member" : "Guest"}</p>
+              </div>
+            </div>
+            <p className="mt-2 text-xs leading-5 text-ink/55">Location and device details are shared only when you press their buttons.</p>
           </div>
 
           <div className="glass rounded-lg p-4 shadow-soft">
@@ -597,8 +672,8 @@ export function LoveRoom({ roomId, onBack }: Props) {
           </div>
 
           <div className="glass rounded-lg p-4 shadow-soft">
-            <p className="mb-3 text-sm font-black text-ink">Shared guest info</p>
-            {participants.length === 0 ? <p className="text-xs leading-5 text-ink/55">Guests can save their name, bio, photo, location, and device info by choice.</p> : null}
+            <p className="mb-3 text-sm font-black text-ink">Shared profile info</p>
+            {participants.length === 0 ? <p className="text-xs leading-5 text-ink/55">Location and device info appears here only after a user shares it.</p> : null}
             <div className="space-y-2">
               {participants.map((person) => (
                 <div key={person.id} className="rounded-md bg-white/75 p-3 text-xs leading-5 text-ink/70">
@@ -613,8 +688,18 @@ export function LoveRoom({ roomId, onBack }: Props) {
 
           <div className="glass rounded-lg p-4 shadow-soft">
             <p className="mb-3 text-sm font-black text-ink">Mini game</p>
+            <div className="mb-3 grid grid-cols-2 gap-2 text-center">
+              <div className="rounded-md bg-white/75 p-2">
+                <p className="text-lg font-black text-ink">{myScore}</p>
+                <p className="text-[11px] font-bold text-ink/50">You</p>
+              </div>
+              <div className="rounded-md bg-white/75 p-2">
+                <p className="text-lg font-black text-ink">{otherScore}</p>
+                <p className="text-[11px] font-bold text-ink/50">Other</p>
+              </div>
+            </div>
             <button
-              onClick={() => sendMessage({ kind: "game", text: `${currentProfile.name} tapped the room game. +1 point.` })}
+              onClick={tapGame}
               className="flex w-full items-center justify-center gap-2 rounded-md bg-[color:var(--theme-primary)] px-3 py-3 text-sm font-bold text-white"
             >
               <Heart className="h-4 w-4 fill-white" />
@@ -709,43 +794,77 @@ function compressImageFile(file: File): Promise<string> {
   });
 }
 
+function initials(name: string) {
+  return (
+    name
+      .split(/\s+/)
+      .filter(Boolean)
+      .slice(0, 2)
+      .map((part) => part[0]?.toUpperCase())
+      .join("") || "U"
+  );
+}
+
+function Avatar({ name, photoUrl }: { name: string; photoUrl?: string }) {
+  if (photoUrl) {
+    return <Image src={photoUrl} alt="" width={40} height={40} unoptimized className="h-10 w-10 shrink-0 rounded-full border border-white/70 object-cover" />;
+  }
+  return <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-ink text-sm font-black text-white">{initials(name)}</div>;
+}
+
 function ProfileCard({
   title,
   profile,
+  participant,
+  active,
   onChange
 }: {
   title: string;
   profile: Profile;
-  onChange: (field: keyof Profile, value: string) => void;
+  participant?: Participant;
+  active?: boolean;
+  onChange?: (field: keyof Profile, value: string) => void;
 }) {
   return (
     <div className="glass rounded-lg p-4 shadow-soft">
-      <p className="mb-3 text-sm font-black text-ink">{title} profile</p>
+      <div className="mb-3 flex items-center gap-3">
+        <Avatar name={profile.name || title} photoUrl={profile.photoUrl} />
+        <div className="min-w-0">
+          <p className="truncate text-sm font-black text-ink">{title}</p>
+          <p className="truncate text-xs text-ink/55">{active ? "Active now" : participant?.lastActiveAt ? "Recently active" : "Waiting"}</p>
+        </div>
+      </div>
       <div className="space-y-2">
         <input
           value={profile.name}
-          onChange={(event) => onChange("name", event.target.value)}
+          onChange={(event) => onChange?.("name", event.target.value)}
+          readOnly={!onChange}
           className="w-full rounded-md border border-ink/10 bg-white px-3 py-2 text-sm font-bold text-ink"
           placeholder="Name"
         />
         <input
           value={profile.role}
-          onChange={(event) => onChange("role", event.target.value)}
+          onChange={(event) => onChange?.("role", event.target.value)}
+          readOnly={!onChange}
           className="w-full rounded-md border border-ink/10 bg-white px-3 py-2 text-sm text-ink"
           placeholder="Role"
         />
         <textarea
           value={profile.bio}
-          onChange={(event) => onChange("bio", event.target.value)}
+          onChange={(event) => onChange?.("bio", event.target.value)}
+          readOnly={!onChange}
           className="min-h-20 w-full resize-none rounded-md border border-ink/10 bg-white px-3 py-2 text-sm leading-5 text-ink"
           placeholder="Bio"
         />
         <input
           value={profile.photoUrl}
-          onChange={(event) => onChange("photoUrl", event.target.value)}
+          onChange={(event) => onChange?.("photoUrl", event.target.value)}
+          readOnly={!onChange}
           className="w-full rounded-md border border-ink/10 bg-white px-3 py-2 text-sm text-ink"
           placeholder="Profile photo URL"
         />
+        {participant?.locationText ? <p className="rounded-md bg-white/70 p-2 text-xs leading-5 text-ink/65">Location: {participant.locationText}</p> : null}
+        {participant?.deviceText ? <p className="rounded-md bg-white/70 p-2 text-xs leading-5 text-ink/65">Device: {participant.deviceText}</p> : null}
       </div>
     </div>
   );

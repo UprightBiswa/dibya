@@ -1,27 +1,37 @@
 "use client";
 
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
+import Image from "next/image";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { GoogleAuthProvider, onAuthStateChanged, signInWithPopup, signOut, type User } from "firebase/auth";
+import { collection, deleteDoc, doc, getDocs, onSnapshot, query, serverTimestamp, setDoc, updateDoc, where, writeBatch } from "firebase/firestore";
 import {
-  collection,
-  deleteDoc,
-  doc,
-  getDocs,
-  onSnapshot,
-  query,
-  serverTimestamp,
-  setDoc,
-  updateDoc,
-  where,
-  writeBatch
-} from "firebase/firestore";
-import { Check, Copy, HeartHandshake, Inbox, LogOut, MessageCircle, Search, ShieldCheck, Sparkles, Trash2, UserPlus, Users, X } from "lucide-react";
+  Bell,
+  Check,
+  HeartHandshake,
+  Inbox,
+  LogOut,
+  MessageCircle,
+  Search,
+  Send,
+  Share2,
+  ShieldCheck,
+  Sparkles,
+  Trash2,
+  UserPlus,
+  Users,
+  Volume2,
+  VolumeX,
+  X
+} from "lucide-react";
 import { auth, db, hasFirebaseConfig } from "@/lib/firebase";
 import { defaultRoom } from "@/lib/room-data";
+import { useAppStore } from "@/lib/app-store";
 import type { AppUser, ChatInvite, SharedRoom } from "@/lib/types";
 import { LoveRoom } from "./love-room";
+
+type TabId = "chats" | "users" | "requests" | "profile";
 
 function slugify(value: string) {
   return (
@@ -49,8 +59,9 @@ export function HomeShell() {
   const [foundUser, setFoundUser] = useState<AppUser | null>(null);
   const [allUsers, setAllUsers] = useState<AppUser[]>([]);
   const [invites, setInvites] = useState<ChatInvite[]>([]);
-  const [activeTab, setActiveTab] = useState<"chats" | "users" | "requests" | "profile">("chats");
   const [authError, setAuthError] = useState("");
+  const [notice, setNotice] = useState("");
+  const { activeTab, setActiveTab, soundEnabled, toggleSound, playTone } = useAppStore();
 
   useEffect(() => {
     if (!auth) return;
@@ -58,19 +69,23 @@ export function HomeShell() {
       setUser(nextUser);
       if (!nextUser || !db) return;
       const fallbackUsername = slugify(nextUser.displayName || nextUser.email?.split("@")[0] || "user");
-      const userProfile: AppUser = {
-        uid: nextUser.uid,
-        email: nextUser.email || "",
-        displayName: nextUser.displayName || fallbackUsername,
-        username: fallbackUsername,
-        usernameLower: fallbackUsername.toLowerCase(),
-        name: nextUser.displayName || fallbackUsername,
-        role: "Member",
-        bio: "",
-        photoUrl: nextUser.photoURL || "",
-        createdAt: Date.now()
-      };
-      await setDoc(doc(db, "users", nextUser.uid), userProfile, { merge: true });
+      await setDoc(
+        doc(db, "users", nextUser.uid),
+        {
+          uid: nextUser.uid,
+          email: nextUser.email || "",
+          displayName: nextUser.displayName || fallbackUsername,
+          username: fallbackUsername,
+          usernameLower: fallbackUsername.toLowerCase(),
+          name: nextUser.displayName || fallbackUsername,
+          role: "Member",
+          bio: "",
+          photoUrl: nextUser.photoURL || "",
+          createdAt: Date.now(),
+          lastActiveAt: Date.now()
+        } satisfies AppUser,
+        { merge: true }
+      );
     });
   }, []);
 
@@ -86,7 +101,7 @@ export function HomeShell() {
         snap.docs
           .map((item) => ({ id: item.id, ...item.data() }) as SharedRoom)
           .filter((room) => !room.deleted)
-          .sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0))
+          .sort((a, b) => (b.lastMessageAt ?? b.createdAt ?? 0) - (a.lastMessageAt ?? a.createdAt ?? 0))
       );
     });
 
@@ -101,7 +116,9 @@ export function HomeShell() {
     });
 
     const unsubInvites = onSnapshot(query(collection(db, "invites"), where("toUid", "==", user.uid), where("status", "==", "pending")), (snap) => {
-      setInvites(snap.docs.map((item) => ({ id: item.id, ...item.data() }) as ChatInvite));
+      const next = snap.docs.map((item) => ({ id: item.id, ...item.data() }) as ChatInvite);
+      if (next.length > invites.length) playTone("success");
+      setInvites(next);
     });
 
     const unsubUsers = onSnapshot(collection(db, "users"), (snap) => {
@@ -114,10 +131,14 @@ export function HomeShell() {
       unsubInvites();
       unsubUsers();
     };
-  }, [user]);
+  }, [invites.length, playTone, user]);
 
-  const origin = typeof window === "undefined" ? "" : window.location.origin;
+  const appUrl = typeof window === "undefined" ? "" : window.location.origin;
   const filteredRooms = rooms.filter((room) => roomTitle(room, user?.uid).toLowerCase().includes(search.toLowerCase()));
+  const filteredUsers = useMemo(() => {
+    const term = search.toLowerCase();
+    return allUsers.filter((item) => `${item.name} ${item.username} ${item.bio}`.toLowerCase().includes(term));
+  }, [allUsers, search]);
 
   async function login() {
     if (!auth) return;
@@ -126,10 +147,22 @@ export function HomeShell() {
       const provider = new GoogleAuthProvider();
       provider.setCustomParameters({ prompt: "select_account" });
       await signInWithPopup(auth, provider);
+      playTone("success");
     } catch (error) {
       const message = error instanceof Error ? error.message : "Google login failed.";
       setAuthError(message);
     }
+  }
+
+  async function shareApp() {
+    const shareText = "Join me on HeartLink. Login, set your username, and send me a chat request.";
+    if (navigator.share) {
+      await navigator.share({ title: "HeartLink", text: shareText, url: appUrl });
+    } else {
+      await navigator.clipboard.writeText(`${shareText} ${appUrl}`);
+      setNotice("App link copied.");
+    }
+    playTone("success");
   }
 
   async function deleteRoom(roomIdToDelete: string) {
@@ -141,10 +174,7 @@ export function HomeShell() {
     participants.docs.forEach((item) => batch.delete(item.ref));
     await batch.commit();
     await deleteDoc(doc(db, "rooms", roomIdToDelete));
-  }
-
-  async function copyInvite(id: string) {
-    await navigator.clipboard.writeText(`${origin}/?room=${id}`);
+    playTone("tap");
   }
 
   async function saveProfile() {
@@ -162,10 +192,13 @@ export function HomeShell() {
         usernameLower: cleanUsername.toLowerCase(),
         bio,
         photoUrl,
-        updatedAt: serverTimestamp()
+        updatedAt: serverTimestamp(),
+        lastActiveAt: Date.now()
       },
       { merge: true }
     );
+    setNotice("Profile saved.");
+    playTone("success");
   }
 
   async function findUser(event: FormEvent<HTMLFormElement>) {
@@ -174,6 +207,7 @@ export function HomeShell() {
     const snap = await getDocs(query(collection(db, "users"), where("usernameLower", "==", slugify(findUsername).toLowerCase())));
     const match = snap.docs.map((item) => item.data() as AppUser).find((item) => item.uid !== user?.uid) ?? null;
     setFoundUser(match);
+    if (!match) setNotice("No user found with that username.");
   }
 
   async function sendInviteTo(targetUser: AppUser) {
@@ -183,11 +217,17 @@ export function HomeShell() {
       id,
       fromUid: user.uid,
       fromName: profile.name || profile.username,
+      fromUsername: profile.username,
+      fromPhotoUrl: profile.photoUrl,
       toUid: targetUser.uid,
       toName: targetUser.name || targetUser.username,
+      toUsername: targetUser.username,
+      toPhotoUrl: targetUser.photoUrl,
       status: "pending",
       createdAt: Date.now()
     });
+    setNotice(`Request sent to ${targetUser.name || targetUser.username}.`);
+    playTone("send");
   }
 
   async function acceptInvite(invite: ChatInvite) {
@@ -201,268 +241,220 @@ export function HomeShell() {
       participantUids: [invite.fromUid, invite.toUid],
       partnerName: invite.fromName,
       createdAt: Date.now(),
-      updatedAt: serverTimestamp(),
+      updatedAt: Date.now(),
+      lastMessage: "Chat request accepted.",
+      lastMessageAt: Date.now(),
       profiles: {
-        owner: { ...defaultRoom.profiles.owner, name: invite.fromName },
-        peer: { ...defaultRoom.profiles.peer, name: profile.name || invite.toName }
+        owner: { name: invite.fromName, role: `@${invite.fromUsername || "user"}`, bio: "", photoUrl: invite.fromPhotoUrl || "" },
+        peer: { name: profile.name || invite.toName, role: `@${profile.username || invite.toUsername || "user"}`, bio: profile.bio || "", photoUrl: profile.photoUrl || "" }
       }
     });
     await updateDoc(doc(db, "invites", invite.id), { status: "accepted", roomId: id, acceptedAt: serverTimestamp() });
+    playTone("success");
     router.push(`/?room=${id}`);
   }
 
   async function declineInvite(invite: ChatInvite) {
     if (!db) return;
     await updateDoc(doc(db, "invites", invite.id), { status: "declined", declinedAt: serverTimestamp() });
+    playTone("tap");
   }
 
   if (roomId) {
     return <LoveRoom roomId={roomId} onBack={() => (window.location.href = "/")} />;
   }
 
-  return (
-    <main className="min-h-screen px-4 py-5 sm:px-6 lg:px-8">
-      <section className="mx-auto grid max-w-7xl gap-4 lg:grid-cols-[minmax(0,1fr)_420px]">
-        <div className="overflow-hidden rounded-lg bg-ink text-white shadow-soft">
-          <div className="grid min-h-[38rem] gap-8 p-6 sm:p-8 lg:grid-cols-[minmax(0,1fr)_340px]">
-            <div className="flex flex-col justify-between">
-              <div>
-                <div className="flex w-fit items-center gap-2 rounded-full bg-white/10 px-3 py-2 text-xs font-bold uppercase tracking-wider text-white/80">
-                  <Sparkles className="h-4 w-4 text-honey" />
-                  HeartLink social rooms
-                </div>
-                <h1 className="mt-5 max-w-3xl text-4xl font-black leading-tight sm:text-5xl">
-                  Private social chat for people you actually care about.
-                </h1>
-                <p className="mt-4 max-w-2xl text-sm leading-7 text-white/68">
-                  Create your profile, discover users, send a chat request, accept or deny invites, and open a shared room with realtime messages, photos, reactions, room themes, and playful taps.
-                </p>
-              </div>
-
-              <div className="mt-8 grid gap-3 sm:grid-cols-4">
-                {[
-                  { icon: Users, label: "Profiles" },
-                  { icon: UserPlus, label: "Requests" },
-                  { icon: MessageCircle, label: "Chats" },
-                  { icon: HeartHandshake, label: "Games" }
-                ].map((item) => (
-                  <div key={item.label} className="rounded-lg border border-white/10 bg-white/8 p-3">
-                    <item.icon className="h-5 w-5 text-honey" />
-                    <p className="mt-3 text-xs font-bold text-white/80">{item.label}</p>
-                  </div>
-                ))}
-              </div>
+  if (!user) {
+    return (
+      <main className="min-h-screen overflow-hidden px-4 py-5 sm:px-6 lg:px-8">
+        <section className="mx-auto grid min-h-[calc(100vh-2.5rem)] max-w-7xl content-center gap-6 lg:grid-cols-[minmax(0,1fr)_390px]">
+          <div className="rounded-lg bg-ink p-6 text-white shadow-soft sm:p-9">
+            <div className="flex w-fit items-center gap-2 rounded-full bg-white/10 px-3 py-2 text-xs font-bold uppercase tracking-wider text-white/80">
+              <Sparkles className="h-4 w-4 text-honey" />
+              HeartLink
             </div>
-
-            <div className="rounded-lg bg-white p-4 text-ink">
-              <p className="text-sm font-black">How it works</p>
-              <div className="mt-4 space-y-3">
-                {["Login with Google", "Set your public username", "Send or accept a request", "Start chatting in a shared room"].map((item, index) => (
-                  <div key={item} className="flex gap-3 rounded-md bg-petal p-3">
-                    <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-ink text-xs font-black text-white">{index + 1}</span>
-                    <p className="pt-1 text-sm font-bold leading-5">{item}</p>
-                  </div>
-                ))}
-              </div>
-
-              {!hasFirebaseConfig ? (
-                <p className="mt-4 rounded-md bg-honey/50 p-3 text-sm font-bold text-ink">Firebase config is missing, so login and history are disabled.</p>
-              ) : null}
-
-              {!user ? (
-                <>
-                  <button onClick={login} className="mt-5 w-full rounded-md bg-ink px-5 py-3 text-sm font-bold text-white">
-                    Continue with Google
-                  </button>
-                  {authError ? (
-                    <p className="mt-3 rounded-md bg-red-50 p-3 text-sm font-bold leading-6 text-red-700">
-                      {authError.includes("unauthorized-domain")
-                        ? "Google login is blocked because this domain is not authorized in Firebase Authentication settings."
-                        : authError}
-                    </p>
-                  ) : null}
-                </>
-              ) : (
-                <div className="mt-5 rounded-md border border-ink/10 p-3">
-                  <p className="text-xs font-bold text-ink/55">Signed in as</p>
-                  <p className="mt-1 truncate text-sm font-black">{profile?.name || user.displayName || user.email}</p>
+            <h1 className="mt-6 max-w-4xl text-4xl font-black leading-tight sm:text-6xl">A private social inbox for close connections.</h1>
+            <p className="mt-5 max-w-2xl text-sm leading-7 text-white/68">
+              HeartLink works like a tiny social app: login, create your profile, discover people by username, send a request, and chat in a private 1:1 room with photos, camera snaps, themes, reactions, games, and consent-only sharing.
+            </p>
+            <div className="mt-8 grid gap-3 sm:grid-cols-4">
+              {[
+                { icon: Users, label: "Profiles" },
+                { icon: Bell, label: "Requests" },
+                { icon: MessageCircle, label: "Realtime chat" },
+                { icon: HeartHandshake, label: "Shared games" }
+              ].map((item) => (
+                <div key={item.label} className="rounded-lg border border-white/10 bg-white/8 p-3">
+                  <item.icon className="h-5 w-5 text-honey" />
+                  <p className="mt-3 text-xs font-bold text-white/80">{item.label}</p>
                 </div>
-              )}
+              ))}
             </div>
           </div>
-        </div>
 
-        <aside className="glass rounded-lg p-5 shadow-soft">
-          {user ? (
-            <>
-              <div className="flex items-center justify-between gap-3">
-                <div className="min-w-0">
-                  <p className="truncate text-sm font-black text-ink">{profile?.name || user.displayName || "Member"}</p>
-                  <p className="truncate text-xs text-ink/55">@{profile?.username || "set-username"} - {user.email}</p>
+          <aside className="glass rounded-lg p-5 shadow-soft">
+            <p className="text-sm font-black text-ink">Onboard</p>
+            <div className="mt-4 space-y-3">
+              {["Sign in with Google", "Set name, username, bio, avatar", "Share the app or find users", "Accept requests and chat"].map((item, index) => (
+                <div key={item} className="flex gap-3 rounded-md bg-white/70 p-3">
+                  <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-ink text-xs font-black text-white">{index + 1}</span>
+                  <p className="pt-1 text-sm font-bold leading-5 text-ink">{item}</p>
                 </div>
-                <button onClick={() => auth && signOut(auth)} className="rounded-md border border-ink/10 p-2 text-ink" aria-label="Sign out">
-                  <LogOut className="h-4 w-4" />
+              ))}
+            </div>
+            {!hasFirebaseConfig ? <p className="mt-4 rounded-md bg-honey/50 p-3 text-sm font-bold text-ink">Firebase config is missing.</p> : null}
+            <button onClick={login} className="mt-5 w-full rounded-md bg-ink px-5 py-3 text-sm font-bold text-white">
+              Continue with Google
+            </button>
+            <button onClick={shareApp} className="mt-2 flex w-full items-center justify-center gap-2 rounded-md border border-ink/10 bg-white px-5 py-3 text-sm font-bold text-ink">
+              <Share2 className="h-4 w-4" />
+              Share app
+            </button>
+            {authError ? <p className="mt-3 rounded-md bg-red-50 p-3 text-sm font-bold leading-6 text-red-700">{authError}</p> : null}
+          </aside>
+        </section>
+      </main>
+    );
+  }
+
+  return (
+    <main className="min-h-screen px-3 py-3 sm:px-5 lg:px-6">
+      <section className="mx-auto grid max-w-7xl gap-3 lg:h-[calc(100vh-1.5rem)] lg:grid-cols-[320px_minmax(0,1fr)]">
+        <aside className="glass flex min-h-[34rem] flex-col rounded-lg p-3 shadow-soft lg:h-full">
+          <div className="flex items-center gap-3 p-2">
+            <Avatar name={profile?.name || user.displayName || "Me"} photoUrl={profile?.photoUrl || user.photoURL || ""} />
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-sm font-black text-ink">{profile?.name || user.displayName || "Member"}</p>
+              <p className="truncate text-xs text-ink/55">@{profile?.username || "set-username"}</p>
+            </div>
+            <button onClick={toggleSound} className="rounded-md border border-ink/10 bg-white p-2 text-ink" aria-label="Toggle sound">
+              {soundEnabled ? <Volume2 className="h-4 w-4" /> : <VolumeX className="h-4 w-4" />}
+            </button>
+            <button onClick={() => auth && signOut(auth)} className="rounded-md border border-ink/10 bg-white p-2 text-ink" aria-label="Sign out">
+              <LogOut className="h-4 w-4" />
+            </button>
+          </div>
+
+          <div className="mt-2 grid grid-cols-4 gap-1 rounded-lg bg-white/70 p-1">
+            {[
+              { id: "chats", label: "Chats", icon: MessageCircle },
+              { id: "users", label: "Users", icon: Users },
+              { id: "requests", label: "Req", icon: Inbox, count: invites.length },
+              { id: "profile", label: "Me", icon: ShieldCheck }
+            ].map((tab) => (
+              <button
+                key={tab.id}
+                onClick={() => setActiveTab(tab.id as TabId)}
+                className={`relative flex min-h-14 flex-col items-center justify-center gap-1 rounded-md px-2 py-2 text-[11px] font-black ${
+                  activeTab === tab.id ? "bg-ink text-white" : "text-ink/60"
+                }`}
+              >
+                <tab.icon className="h-4 w-4" />
+                {tab.label}
+                {tab.count ? <span className="absolute right-1 top-1 rounded-full bg-[color:var(--theme-primary)] px-1.5 text-[10px] text-white">{tab.count}</span> : null}
+              </button>
+            ))}
+          </div>
+
+          <div className="mt-3 flex items-center gap-2 rounded-md border border-ink/10 bg-white px-3 py-2">
+            <Search className="h-4 w-4 text-ink/45" />
+            <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search" className="min-w-0 flex-1 bg-transparent text-sm font-bold outline-none" />
+          </div>
+
+          <div className="no-scrollbar mt-3 min-h-0 flex-1 space-y-2 overflow-y-auto pr-1">
+            {activeTab === "chats" ? (
+              <>
+                {rooms.length === 0 ? <EmptyState title="No chats yet" text="Find a user, send a request, or accept one from Requests." /> : null}
+                {filteredRooms.map((room) => (
+                  <ChatRow key={room.id} room={room} uid={user.uid} onDelete={() => deleteRoom(room.id)} />
+                ))}
+              </>
+            ) : null}
+
+            {activeTab === "users" ? (
+              <>
+                <form onSubmit={findUser} className="flex gap-2 rounded-lg bg-white/70 p-2">
+                  <input value={findUsername} onChange={(event) => setFindUsername(event.target.value)} placeholder="Find username" className="min-w-0 flex-1 rounded-md border border-ink/10 px-3 py-2 text-sm font-bold" />
+                  <button className="rounded-md bg-ink px-3 py-2 text-xs font-bold text-white">Find</button>
+                </form>
+                {foundUser ? <UserRow user={foundUser} action="Send" onAction={() => sendInviteTo(foundUser)} /> : null}
+                {filteredUsers.length === 0 ? <EmptyState title="No users found" text="Share the app with someone. After they login, they show here." /> : null}
+                {filteredUsers.map((item) => (
+                  <UserRow key={item.uid} user={item} action="Request" onAction={() => sendInviteTo(item)} />
+                ))}
+              </>
+            ) : null}
+
+            {activeTab === "requests" ? (
+              <>
+                {invites.length === 0 ? <EmptyState title="No pending requests" text="New chat requests will appear here with accept and deny buttons." /> : null}
+                {invites.map((invite) => (
+                  <div key={invite.id} className="rounded-lg bg-white/75 p-3">
+                    <div className="flex items-center gap-3">
+                      <Avatar name={invite.fromName} photoUrl={invite.fromPhotoUrl || ""} />
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-sm font-black text-ink">{invite.fromName}</p>
+                        <p className="truncate text-xs text-ink/55">@{invite.fromUsername || "user"} sent a request</p>
+                      </div>
+                    </div>
+                    <div className="mt-3 grid grid-cols-2 gap-2">
+                      <button onClick={() => acceptInvite(invite)} className="flex items-center justify-center gap-1 rounded-md bg-ink px-3 py-2 text-xs font-bold text-white">
+                        <Check className="h-3 w-3" />
+                        Accept
+                      </button>
+                      <button onClick={() => declineInvite(invite)} className="flex items-center justify-center gap-1 rounded-md border border-ink/10 px-3 py-2 text-xs font-bold text-ink">
+                        <X className="h-3 w-3" />
+                        Deny
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </>
+            ) : null}
+
+            {activeTab === "profile" ? (
+              <div className="rounded-lg bg-white/75 p-3">
+                <p className="mb-3 text-sm font-black text-ink">Profile</p>
+                <input value={name} onChange={(event) => setName(event.target.value)} placeholder="Display name" className="mb-2 w-full rounded-md border border-ink/10 px-3 py-2 text-sm font-bold" />
+                <input value={username} onChange={(event) => setUsername(event.target.value)} placeholder="Unique username" className="mb-2 w-full rounded-md border border-ink/10 px-3 py-2 text-sm font-bold" />
+                <textarea value={bio} onChange={(event) => setBio(event.target.value)} placeholder="Bio" className="mb-2 min-h-20 w-full resize-none rounded-md border border-ink/10 px-3 py-2 text-sm" />
+                <input value={photoUrl} onChange={(event) => setPhotoUrl(event.target.value)} placeholder="Photo URL" className="mb-2 w-full rounded-md border border-ink/10 px-3 py-2 text-sm" />
+                <button onClick={saveProfile} className="w-full rounded-md bg-ink px-3 py-2 text-xs font-bold text-white">Save profile</button>
+                <button onClick={shareApp} className="mt-2 flex w-full items-center justify-center gap-2 rounded-md border border-ink/10 bg-white px-3 py-2 text-xs font-bold text-ink">
+                  <Share2 className="h-3 w-3" />
+                  Share app
                 </button>
               </div>
-
-              <div className="mt-5 grid grid-cols-4 gap-1 rounded-lg bg-white/70 p-1">
-                {[
-                  { id: "chats", label: "Chats", icon: MessageCircle },
-                  { id: "users", label: "Users", icon: Users },
-                  { id: "requests", label: "Req", icon: Inbox },
-                  { id: "profile", label: "Me", icon: ShieldCheck }
-                ].map((tab) => (
-                  <button
-                    key={tab.id}
-                    onClick={() => setActiveTab(tab.id as typeof activeTab)}
-                    className={`flex min-h-14 flex-col items-center justify-center gap-1 rounded-md px-2 py-2 text-[11px] font-black ${
-                      activeTab === tab.id ? "bg-ink text-white" : "text-ink/60"
-                    }`}
-                  >
-                    <tab.icon className="h-4 w-4" />
-                    {tab.label}
-                  </button>
-                ))}
-              </div>
-
-              <div className="mt-4 max-h-[calc(100vh-9rem)] space-y-3 overflow-y-auto pr-1">
-                {activeTab === "chats" ? (
-                  <>
-                    <div className="flex items-center gap-2 rounded-md border border-ink/10 bg-white px-3 py-2">
-                      <Search className="h-4 w-4 text-ink/45" />
-                      <input
-                        value={search}
-                        onChange={(event) => setSearch(event.target.value)}
-                        placeholder="Search chats"
-                        className="min-w-0 flex-1 bg-transparent text-sm font-bold outline-none"
-                      />
-                    </div>
-                    {rooms.length === 0 ? (
-                      <EmptyState title="No chats yet" text="Open Users, send a request, or accept a request when someone invites you." />
-                    ) : null}
-                    {filteredRooms.map((room) => (
-                      <div key={room.id} className="rounded-lg border border-ink/10 bg-white/75 p-3">
-                        <Link href={`/?room=${room.id}`} className="block font-black text-ink">
-                          {roomTitle(room, user.uid)}
-                        </Link>
-                        <p className="mt-1 truncate text-xs text-ink/50">{origin}/?room={room.id}</p>
-                        <div className="mt-3 grid grid-cols-2 gap-2">
-                          <button onClick={() => copyInvite(room.id)} className="flex items-center justify-center gap-2 rounded-md bg-ink px-3 py-2 text-xs font-bold text-white">
-                            <Copy className="h-3 w-3" />
-                            Copy
-                          </button>
-                          <button
-                            onClick={() => deleteRoom(room.id)}
-                            className="flex items-center justify-center gap-2 rounded-md border border-ink/10 px-3 py-2 text-xs font-bold text-ink"
-                          >
-                            <Trash2 className="h-3 w-3" />
-                            Delete
-                          </button>
-                        </div>
-                      </div>
-                    ))}
-                  </>
-                ) : null}
-
-                {activeTab === "users" ? (
-                  <div className="rounded-lg border border-ink/10 bg-white/75 p-3">
-                    <p className="mb-3 flex items-center gap-2 text-sm font-black text-ink">
-                      <UserPlus className="h-4 w-4" />
-                      Find people
-                    </p>
-                    <form onSubmit={findUser} className="flex gap-2">
-                      <input
-                        value={findUsername}
-                        onChange={(event) => setFindUsername(event.target.value)}
-                        placeholder="username"
-                        className="min-w-0 flex-1 rounded-md border border-ink/10 px-3 py-2 text-sm font-bold"
-                      />
-                      <button className="rounded-md bg-ink px-3 py-2 text-xs font-bold text-white">Find</button>
-                    </form>
-                    {foundUser ? <UserRow user={foundUser} action="Send invite" onAction={() => sendInviteTo(foundUser)} /> : null}
-                    <div className="mt-3 space-y-2">
-                      {allUsers.length === 0 ? <EmptyState title="No users yet" text="Ask another person to login once. Their profile will appear here." /> : null}
-                      {allUsers.map((item) => (
-                        <UserRow key={item.uid} user={item} action="Send request" onAction={() => sendInviteTo(item)} />
-                      ))}
-                    </div>
-                  </div>
-                ) : null}
-
-                {activeTab === "requests" ? (
-                  <div className="rounded-lg border border-ink/10 bg-white/75 p-3">
-                    <p className="mb-3 flex items-center gap-2 text-sm font-black text-ink">
-                      <Inbox className="h-4 w-4" />
-                      Requests
-                    </p>
-                    {invites.length === 0 ? <EmptyState title="No pending requests" text="When someone sends you an invite, accept or deny it here." /> : null}
-                    <div className="space-y-2">
-                      {invites.map((invite) => (
-                        <div key={invite.id} className="rounded-md bg-petal p-3">
-                          <p className="text-xs font-bold text-ink/60">{invite.fromName} wants to start a chat with you.</p>
-                          <div className="mt-2 grid grid-cols-2 gap-2">
-                            <button onClick={() => acceptInvite(invite)} className="flex items-center justify-center gap-1 rounded-md bg-ink px-3 py-2 text-xs font-bold text-white">
-                              <Check className="h-3 w-3" />
-                              Accept
-                            </button>
-                            <button onClick={() => declineInvite(invite)} className="flex items-center justify-center gap-1 rounded-md border border-ink/10 px-3 py-2 text-xs font-bold text-ink">
-                              <X className="h-3 w-3" />
-                              Deny
-                            </button>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                ) : null}
-
-                {activeTab === "profile" ? (
-                  <div className="rounded-lg border border-ink/10 bg-white/75 p-3">
-                    <p className="mb-3 text-sm font-black text-ink">My profile</p>
-                    <input
-                      value={name}
-                      onChange={(event) => setName(event.target.value)}
-                      placeholder="display name"
-                      className="mb-2 w-full rounded-md border border-ink/10 px-3 py-2 text-sm font-bold"
-                    />
-                    <input
-                      value={username}
-                      onChange={(event) => setUsername(event.target.value)}
-                      placeholder="unique username"
-                      className="mb-2 w-full rounded-md border border-ink/10 px-3 py-2 text-sm font-bold"
-                    />
-                    <textarea
-                      value={bio}
-                      onChange={(event) => setBio(event.target.value)}
-                      placeholder="bio"
-                      className="mb-2 min-h-20 w-full resize-none rounded-md border border-ink/10 px-3 py-2 text-sm"
-                    />
-                    <input
-                      value={photoUrl}
-                      onChange={(event) => setPhotoUrl(event.target.value)}
-                      placeholder="photo url"
-                      className="mb-2 w-full rounded-md border border-ink/10 px-3 py-2 text-sm"
-                    />
-                    <button onClick={saveProfile} className="w-full rounded-md bg-ink px-3 py-2 text-xs font-bold text-white">
-                      Save profile
-                    </button>
-                  </div>
-                ) : null}
-              </div>
-            </>
-          ) : (
-            <div className="space-y-4">
-              <p className="text-sm font-black text-ink">Welcome to HeartLink</p>
-              <p className="text-sm leading-6 text-ink/65">
-                This is a small private social app. Login to create your profile, see users, manage requests, and keep your chat history.
-              </p>
-              <button onClick={login} className="w-full rounded-md bg-ink px-5 py-3 text-sm font-bold text-white">
-                Continue with Google
-              </button>
-            </div>
-          )}
+            ) : null}
+          </div>
         </aside>
+
+        <section className="hidden overflow-hidden rounded-lg bg-ink text-white shadow-soft lg:block">
+          <div className="flex h-full flex-col justify-between p-8">
+            <div>
+              <div className="flex w-fit items-center gap-2 rounded-full bg-white/10 px-3 py-2 text-xs font-bold uppercase tracking-wider text-white/75">
+                <Sparkles className="h-4 w-4 text-honey" />
+                Dashboard
+              </div>
+              <h1 className="mt-5 max-w-2xl text-4xl font-black leading-tight">Chat list, people, requests, and profile in one calm place.</h1>
+              <p className="mt-4 max-w-xl text-sm leading-7 text-white/65">
+                Open a chat from the left. Requests create private rooms between two logged-in users. Photos, camera snaps, games, themes, and consent-only info sharing all update live.
+              </p>
+            </div>
+            <div className="grid gap-3 md:grid-cols-3">
+              <Metric label="Chats" value={rooms.length} />
+              <Metric label="Users" value={allUsers.length} />
+              <Metric label="Requests" value={invites.length} />
+            </div>
+          </div>
+        </section>
       </section>
+
+      {notice ? (
+        <button onClick={() => setNotice("")} className="fixed bottom-4 left-1/2 z-50 -translate-x-1/2 rounded-full bg-ink px-4 py-2 text-xs font-bold text-white shadow-soft">
+          {notice}
+        </button>
+      ) : null}
     </main>
   );
 }
@@ -471,6 +463,44 @@ function roomTitle(room: SharedRoom, uid?: string) {
   if (uid && room.ownerUid === uid) return room.profiles.peer.name || room.partnerName || "Chat";
   if (uid && room.peerUid === uid) return room.profiles.owner.name || room.partnerName || "Chat";
   return room.partnerName || room.profiles.peer.name || "Chat";
+}
+
+function otherProfile(room: SharedRoom, uid?: string) {
+  return uid && room.peerUid === uid ? room.profiles.owner : room.profiles.peer;
+}
+
+function initials(name: string) {
+  return name
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase())
+    .join("") || "U";
+}
+
+function Avatar({ name, photoUrl }: { name: string; photoUrl?: string }) {
+  if (photoUrl) {
+    return <Image src={photoUrl} alt="" width={44} height={44} unoptimized className="h-11 w-11 shrink-0 rounded-full border border-white/70 object-cover" />;
+  }
+  return <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-ink text-sm font-black text-white">{initials(name)}</div>;
+}
+
+function ChatRow({ room, uid, onDelete }: { room: SharedRoom; uid: string; onDelete: () => void }) {
+  const profile = otherProfile(room, uid);
+  return (
+    <div className="group rounded-lg bg-white/75 p-3">
+      <div className="flex items-center gap-3">
+        <Avatar name={profile.name} photoUrl={profile.photoUrl} />
+        <Link href={`/?room=${room.id}`} className="min-w-0 flex-1">
+          <p className="truncate text-sm font-black text-ink">{roomTitle(room, uid)}</p>
+          <p className="truncate text-xs text-ink/55">{room.lastMessage || "Open chat"}</p>
+        </Link>
+        <button onClick={onDelete} className="rounded-md border border-ink/10 bg-white p-2 text-ink opacity-100 lg:opacity-0 lg:group-hover:opacity-100" aria-label="Delete chat">
+          <Trash2 className="h-3 w-3" />
+        </button>
+      </div>
+    </div>
+  );
 }
 
 function EmptyState({ title, text }: { title: string; text: string }) {
@@ -484,13 +514,28 @@ function EmptyState({ title, text }: { title: string; text: string }) {
 
 function UserRow({ user, action, onAction }: { user: AppUser; action: string; onAction: () => void }) {
   return (
-    <div className="mt-3 rounded-md bg-petal p-3">
-      <p className="text-sm font-black">{user.name || user.username}</p>
-      <p className="text-xs text-ink/55">@{user.username}</p>
-      {user.bio ? <p className="mt-1 text-xs leading-5 text-ink/65">{user.bio}</p> : null}
-      <button onClick={onAction} className="mt-2 rounded-md bg-ink px-3 py-2 text-xs font-bold text-white">
-        {action}
-      </button>
+    <div className="rounded-lg bg-white/75 p-3">
+      <div className="flex items-center gap-3">
+        <Avatar name={user.name || user.username} photoUrl={user.photoUrl} />
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-sm font-black text-ink">{user.name || user.username}</p>
+          <p className="truncate text-xs text-ink/55">@{user.username}</p>
+          {user.bio ? <p className="mt-1 line-clamp-2 text-xs leading-5 text-ink/65">{user.bio}</p> : null}
+        </div>
+        <button onClick={onAction} className="flex items-center gap-1 rounded-md bg-ink px-3 py-2 text-xs font-bold text-white">
+          <Send className="h-3 w-3" />
+          {action}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function Metric({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="rounded-lg border border-white/10 bg-white/8 p-4">
+      <p className="text-3xl font-black">{value}</p>
+      <p className="mt-1 text-xs font-bold uppercase tracking-wider text-white/55">{label}</p>
     </div>
   );
 }
