@@ -30,8 +30,7 @@ import {
   serverTimestamp,
   setDoc
 } from "firebase/firestore";
-import { getDownloadURL, ref, uploadString } from "firebase/storage";
-import { db, hasFirebaseConfig, storage } from "@/lib/firebase";
+import { db, hasFirebaseConfig } from "@/lib/firebase";
 import { defaultRoom, gifts, loveQuotes, themes } from "@/lib/room-data";
 import { readLocalMessages, readLocalRoom, writeLocalMessages, writeLocalRoom } from "@/lib/local-store";
 import { useUiStore } from "@/lib/store";
@@ -209,35 +208,27 @@ export function LoveRoom({ roomId }: Props) {
     const video = videoRef.current;
     if (!video) return;
     const canvas = document.createElement("canvas");
-    canvas.width = video.videoWidth || 720;
-    canvas.height = video.videoHeight || 960;
+    const size = fitSize(video.videoWidth || 720, video.videoHeight || 960, 520);
+    canvas.width = size.width;
+    canvas.height = size.height;
     const context = canvas.getContext("2d");
     context?.drawImage(video, 0, 0, canvas.width, canvas.height);
-    const dataUrl = canvas.toDataURL("image/jpeg", 0.82);
-    const mediaUrl = await uploadMedia(dataUrl, "snap");
+    const mediaUrl = canvas.toDataURL("image/jpeg", 0.62);
     await sendMessage({ kind: "snap", text: "A fresh camera snap, sent with love.", mediaUrl });
     stopCamera();
-  }
-
-  async function uploadMedia(dataUrl: string, folder: string) {
-    if (!hasFirebaseConfig || !storage) return dataUrl;
-    const fileRef = ref(storage, `rooms/${roomId}/${folder}/${crypto.randomUUID()}.jpg`);
-    await uploadString(fileRef, dataUrl, "data_url");
-    return getDownloadURL(fileRef);
   }
 
   async function handlePhoto(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     if (!file) return;
     setUploading(true);
-    const reader = new FileReader();
-    reader.onload = async () => {
-      const mediaUrl = await uploadMedia(String(reader.result), "photos");
+    try {
+      const mediaUrl = await compressImageFile(file);
       await sendMessage({ kind: "photo", text: "Shared a memory photo.", mediaUrl });
-      setUploading(false);
       event.target.value = "";
-    };
-    reader.readAsDataURL(file);
+    } finally {
+      setUploading(false);
+    }
   }
 
   async function shareLocation() {
@@ -486,6 +477,35 @@ export function LoveRoom({ roomId }: Props) {
       ) : null}
     </main>
   );
+}
+
+function fitSize(width: number, height: number, maxSide: number) {
+  const scale = Math.min(1, maxSide / Math.max(width, height));
+  return {
+    width: Math.max(1, Math.round(width * scale)),
+    height: Math.max(1, Math.round(height * scale))
+  };
+}
+
+function compressImageFile(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("Could not read image"));
+    reader.onload = () => {
+      const image = new window.Image();
+      image.onerror = () => reject(new Error("Could not load image"));
+      image.onload = () => {
+        const size = fitSize(image.width, image.height, 640);
+        const canvas = document.createElement("canvas");
+        canvas.width = size.width;
+        canvas.height = size.height;
+        canvas.getContext("2d")?.drawImage(image, 0, 0, size.width, size.height);
+        resolve(canvas.toDataURL("image/jpeg", 0.62));
+      };
+      image.src = String(reader.result);
+    };
+    reader.readAsDataURL(file);
+  });
 }
 
 function ProfileCard({

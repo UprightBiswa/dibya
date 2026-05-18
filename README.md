@@ -1,6 +1,6 @@
 # Dibya Love Room
 
-A private Next.js room for Dibya and Biswajit with realtime chat, gifts, love quotes, photo sharing, camera snaps, editable profiles, theme changes, and consent-only location/device sharing.
+A private Next.js room for Dibya and Biswajit with realtime chat, gifts, love quotes, compressed photo sharing, camera snaps, editable profiles, theme changes, and consent-only location/device sharing.
 
 ## Run locally
 
@@ -19,10 +19,10 @@ Use Firebase Spark free tier:
 
 1. Create a Firebase project.
 2. Create a Firestore database.
-3. Enable Firebase Storage.
+3. Skip Firebase Storage if it asks for billing. Photos and snaps are compressed and saved in Firestore messages.
 4. Copy `.env.example` to `.env.local`.
 5. Add your web app Firebase config values.
-6. Publish `firestore.rules` and `storage.rules` in Firebase console.
+6. Publish `firestore.rules` in Firebase console or deploy it with Firebase CLI.
 
 The current rules are open because you asked for no login. That keeps sharing simple, but anyone with the link can read/write. For stronger privacy later, add anonymous auth and invite codes.
 
@@ -42,7 +42,7 @@ firebase init hosting
 Choose your Firebase project, answer **yes** to using a web framework, choose **Next.js** if asked, and keep this folder as the source directory. After init, deploy:
 
 ```bash
-firebase deploy
+firebase deploy --only "hosting,firestore:rules"
 ```
 
 If Firebase creates `.firebaserc`, make sure the project id matches your Firebase project. See `.firebaserc.example`.
@@ -63,3 +63,7 @@ https://your-vercel-site.vercel.app/room/dibya-biswajit
 ## Privacy note
 
 Camera, location, and device details are only sent after someone taps the matching button and accepts browser permission where required. The app does not collect hidden location or hidden device information.
+
+## Storage-free photos
+
+This project does not require Firebase Storage. Uploaded photos and camera snaps are resized and compressed in the browser, then saved inside the chat message document in Firestore. Keep photos small; this is perfect for quick snaps, not a full gallery backup.
