@@ -26,6 +26,8 @@ Use Firebase Spark free tier:
 
 The current rules are open because you asked for no login. That keeps sharing simple, but anyone with the link can read/write. For stronger privacy later, add anonymous auth and invite codes.
 
+The package versions are pinned so Vercel and your laptop use the same dependency graph. You can upgrade them later with `npm update` after the first deploy is stable.
+
 ## Deploy to Vercel
 
 1. Push this folder to GitHub.

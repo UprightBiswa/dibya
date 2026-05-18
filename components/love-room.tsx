@@ -1,6 +1,7 @@
 "use client";
 
 import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import Image from "next/image";
 import {
   Camera,
   Copy,
@@ -27,8 +28,7 @@ import {
   orderBy,
   query,
   serverTimestamp,
-  setDoc,
-  updateDoc
+  setDoc
 } from "firebase/firestore";
 import { getDownloadURL, ref, uploadString } from "firebase/storage";
 import { db, hasFirebaseConfig, storage } from "@/lib/firebase";
@@ -539,7 +539,9 @@ function MessageBubble({ message, mine }: { message: LoveMessage; mine: boolean 
           <span>{message.sender}</span>
           <span>{new Date(message.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
         </div>
-        {message.mediaUrl ? <img src={message.mediaUrl} alt="" className="mb-2 max-h-80 w-full rounded-md object-cover" /> : null}
+        {message.mediaUrl ? (
+          <Image src={message.mediaUrl} alt="" width={720} height={960} unoptimized className="mb-2 max-h-80 w-full rounded-md object-cover" />
+        ) : null}
         <p className="whitespace-pre-wrap text-sm leading-6">{message.text}</p>
       </div>
     </article>
