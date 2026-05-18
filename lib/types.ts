@@ -7,6 +7,13 @@ export type Profile = {
   photoUrl: string;
 };
 
+export type Participant = Profile & {
+  id: string;
+  joinedAt: number;
+  locationText?: string;
+  deviceText?: string;
+};
+
 export type SharedRoom = {
   id: string;
   ownerUid?: string;
@@ -26,7 +33,10 @@ export type LoveMessage = {
   id: string;
   roomId: string;
   sender: string;
-  kind: "text" | "gift" | "photo" | "location" | "device" | "snap";
+  senderId?: string;
+  ownerUid?: string;
+  edited?: boolean;
+  kind: "text" | "gift" | "photo" | "location" | "device" | "snap" | "game";
   text: string;
   mediaUrl?: string;
   createdAt: number;

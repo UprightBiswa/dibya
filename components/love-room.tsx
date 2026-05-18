@@ -6,6 +6,7 @@ import { onAuthStateChanged, type User } from "firebase/auth";
 import {
   Camera,
   Copy,
+  Edit3,
   Gift,
   Heart,
   Image as ImageIcon,
@@ -15,6 +16,7 @@ import {
   Palette,
   Send,
   Sparkles,
+  Trash2,
   UserRound,
   Video,
   X
@@ -22,6 +24,7 @@ import {
 import {
   addDoc,
   collection,
+  deleteDoc,
   type DocumentData,
   type QueryDocumentSnapshot,
   doc,
@@ -38,7 +41,7 @@ import {
 import { auth, db, hasFirebaseConfig } from "@/lib/firebase";
 import { defaultRoom, gifts, loveQuotes, themes } from "@/lib/room-data";
 import { readLocalMessages, readLocalRoom, writeLocalMessages, writeLocalRoom } from "@/lib/local-store";
-import type { LoveMessage, Profile, SharedRoom, ThemeName } from "@/lib/types";
+import type { LoveMessage, Participant, Profile, SharedRoom, ThemeName } from "@/lib/types";
 
 type Props = {
   roomId: string;
@@ -54,6 +57,9 @@ export function LoveRoom({ roomId, onBack }: Props) {
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [user, setUser] = useState<User | null>(null);
   const [guestName, setGuestName] = useState("");
+  const [guestBio, setGuestBio] = useState("");
+  const [guestPhotoUrl, setGuestPhotoUrl] = useState("");
+  const [participants, setParticipants] = useState<Participant[]>([]);
   const [text, setText] = useState("");
   const [cameraOpen, setCameraOpen] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -62,6 +68,7 @@ export function LoveRoom({ roomId, onBack }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  const clientIdRef = useRef("");
 
   const isOwner = Boolean(user && room.ownerUid && user.uid === room.ownerUid);
   const isLegacyRoom = !room.ownerUid;
@@ -84,7 +91,12 @@ export function LoveRoom({ roomId, onBack }: Props) {
 
   useEffect(() => {
     const saved = localStorage.getItem(`guest-name:${roomId}`);
+    const savedBio = localStorage.getItem(`guest-bio:${roomId}`);
+    const savedPhoto = localStorage.getItem(`guest-photo:${roomId}`);
     setGuestName(saved || "");
+    setGuestBio(savedBio || "");
+    setGuestPhotoUrl(savedPhoto || "");
+    clientIdRef.current = getClientId();
   }, [roomId]);
 
   useEffect(() => {
@@ -118,6 +130,9 @@ export function LoveRoom({ roomId, onBack }: Props) {
             id: item.id,
             roomId,
             sender: data.sender,
+            senderId: data.senderId,
+            ownerUid: data.ownerUid,
+            edited: data.edited,
             kind: data.kind,
             text: data.text,
             mediaUrl: data.mediaUrl,
@@ -128,9 +143,14 @@ export function LoveRoom({ roomId, onBack }: Props) {
       setMessages((current) => mergeMessages(current.filter((item) => !latest.some((next) => next.id === item.id)), latest));
     });
 
+    const unsubParticipants = onSnapshot(collection(db, "rooms", roomId, "participants"), (snap) => {
+      setParticipants(snap.docs.map((item) => ({ id: item.id, ...item.data() }) as Participant));
+    });
+
     return () => {
       unsubRoom();
       unsubMessages();
+      unsubParticipants();
     };
   }, [roomId]);
 
@@ -167,6 +187,8 @@ export function LoveRoom({ roomId, onBack }: Props) {
       id: crypto.randomUUID(),
       roomId,
       sender: currentProfile.name,
+      senderId: clientIdRef.current,
+      ownerUid: isOwner ? user?.uid : "",
       createdAt: Date.now(),
       ...input
     };
@@ -174,6 +196,8 @@ export function LoveRoom({ roomId, onBack }: Props) {
     if (hasFirebaseConfig && db) {
       await addDoc(collection(db, "rooms", roomId, "messages"), {
         sender: message.sender,
+        senderId: message.senderId ?? "",
+        ownerUid: message.ownerUid ?? "",
         kind: message.kind,
         text: message.text,
         mediaUrl: message.mediaUrl ?? "",
@@ -191,6 +215,20 @@ export function LoveRoom({ roomId, onBack }: Props) {
     if (!text.trim()) return;
     await sendMessage({ kind: "text", text: text.trim() });
     setText("");
+  }
+
+  async function editMessage(message: LoveMessage, nextText: string) {
+    if (!db || !nextText.trim()) return;
+    await setDoc(
+      doc(db, "rooms", roomId, "messages", message.id),
+      { text: nextText.trim(), edited: true, updatedAt: serverTimestamp(), senderId: message.senderId ?? "", ownerUid: message.ownerUid ?? "" },
+      { merge: true }
+    );
+  }
+
+  async function deleteMessage(message: LoveMessage) {
+    if (!db) return;
+    await deleteDoc(doc(db, "rooms", roomId, "messages", message.id));
   }
 
   async function updateProfile(person: "biswajit" | "dibya", field: keyof Profile, value: string) {
@@ -259,6 +297,9 @@ export function LoveRoom({ roomId, onBack }: Props) {
             id: item.id,
             roomId,
             sender: data.sender,
+            senderId: data.senderId,
+            ownerUid: data.ownerUid,
+            edited: data.edited,
             kind: data.kind,
             text: data.text,
             mediaUrl: data.mediaUrl,
@@ -305,6 +346,7 @@ export function LoveRoom({ roomId, onBack }: Props) {
             accuracy
           )}m. ${address}`
         });
+        await saveParticipant({ locationText: `${latitude.toFixed(6)}, ${longitude.toFixed(6)}. ${address}` });
       },
       async () => {
         await sendMessage({ kind: "location", text: "Location permission was not allowed." });
@@ -321,6 +363,24 @@ export function LoveRoom({ roomId, onBack }: Props) {
       `Online: ${navigator.onLine ? "yes" : "no"}`
     ].join("\n");
     await sendMessage({ kind: "device", text: `Shared device details with permission:\n${details}` });
+    await saveParticipant({ deviceText: details });
+  }
+
+  async function saveParticipant(extra: Partial<Participant> = {}) {
+    if (!db || !clientIdRef.current) return;
+    await setDoc(
+      doc(db, "rooms", roomId, "participants", clientIdRef.current),
+      {
+        id: clientIdRef.current,
+        name: guestName || currentProfile.name || "Guest",
+        role: "Invited guest",
+        bio: guestBio,
+        photoUrl: guestPhotoUrl,
+        joinedAt: Date.now(),
+        ...extra
+      },
+      { merge: true }
+    );
   }
 
   if (!isReady) {
@@ -338,8 +398,8 @@ export function LoveRoom({ roomId, onBack }: Props) {
           <div className="glass rounded-lg p-5 shadow-soft">
             <div className="flex items-start justify-between gap-3">
               <div>
-                <p className="text-xs font-bold uppercase tracking-wider text-[color:var(--theme-secondary)]">Private love room</p>
-                <h1 className="mt-1 text-3xl font-black text-ink">Dibya & Biswajit</h1>
+                <p className="text-xs font-bold uppercase tracking-wider text-[color:var(--theme-secondary)]">Private chat room</p>
+                <h1 className="mt-1 text-3xl font-black text-ink">{room.partnerName || room.profiles.dibya.name}</h1>
               </div>
               <Heart className="h-8 w-8 fill-[color:var(--theme-primary)] text-[color:var(--theme-primary)]" />
             </div>
@@ -377,6 +437,27 @@ export function LoveRoom({ roomId, onBack }: Props) {
                 className="w-full rounded-md border border-ink/10 bg-white px-3 py-3 text-sm font-bold text-ink"
                 placeholder="Your name"
               />
+              <textarea
+                value={guestBio}
+                onChange={(event) => {
+                  setGuestBio(event.target.value);
+                  localStorage.setItem(`guest-bio:${roomId}`, event.target.value);
+                }}
+                className="mt-2 min-h-20 w-full resize-none rounded-md border border-ink/10 bg-white px-3 py-3 text-sm text-ink"
+                placeholder="Bio"
+              />
+              <input
+                value={guestPhotoUrl}
+                onChange={(event) => {
+                  setGuestPhotoUrl(event.target.value);
+                  localStorage.setItem(`guest-photo:${roomId}`, event.target.value);
+                }}
+                className="mt-2 w-full rounded-md border border-ink/10 bg-white px-3 py-3 text-sm text-ink"
+                placeholder="Photo URL"
+              />
+              <button onClick={() => saveParticipant()} className="mt-2 w-full rounded-md bg-ink px-3 py-3 text-sm font-bold text-white">
+                Save my info
+              </button>
             </div>
           )}
         </aside>
@@ -414,7 +495,16 @@ export function LoveRoom({ roomId, onBack }: Props) {
                 </p>
               </div>
             ) : (
-              messages.map((message) => <MessageBubble key={message.id} message={message} mine={message.sender === currentProfile.name} />)
+              messages.map((message) => (
+                <MessageBubble
+                  key={message.id}
+                  message={message}
+                  mine={message.senderId === clientIdRef.current || message.sender === currentProfile.name}
+                  canEdit={canManageRoom || message.senderId === clientIdRef.current}
+                  onEdit={editMessage}
+                  onDelete={deleteMessage}
+                />
+              ))
             )}
           </div>
 
@@ -506,6 +596,32 @@ export function LoveRoom({ roomId, onBack }: Props) {
           </div>
 
           <div className="glass rounded-lg p-4 shadow-soft">
+            <p className="mb-3 text-sm font-black text-ink">Shared guest info</p>
+            {participants.length === 0 ? <p className="text-xs leading-5 text-ink/55">Guests can save their name, bio, photo, location, and device info by choice.</p> : null}
+            <div className="space-y-2">
+              {participants.map((person) => (
+                <div key={person.id} className="rounded-md bg-white/75 p-3 text-xs leading-5 text-ink/70">
+                  <p className="text-sm font-black text-ink">{person.name}</p>
+                  {person.bio ? <p>{person.bio}</p> : null}
+                  {person.locationText ? <p>Location: {person.locationText}</p> : null}
+                  {person.deviceText ? <p className="break-words">Device: {person.deviceText}</p> : null}
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="glass rounded-lg p-4 shadow-soft">
+            <p className="mb-3 text-sm font-black text-ink">Mini game</p>
+            <button
+              onClick={() => sendMessage({ kind: "game", text: `${currentProfile.name} tapped the heart game. +1 love point.` })}
+              className="flex w-full items-center justify-center gap-2 rounded-md bg-[color:var(--theme-primary)] px-3 py-3 text-sm font-bold text-white"
+            >
+              <Heart className="h-4 w-4 fill-white" />
+              Tap heart
+            </button>
+          </div>
+
+          <div className="glass rounded-lg p-4 shadow-soft">
             <p className="mb-3 flex items-center gap-2 text-sm font-black text-ink">
               <Palette className="h-4 w-4" />
               Theme
@@ -560,6 +676,15 @@ function fitSize(width: number, height: number, maxSide: number) {
 
 function mergeMessages(left: LoveMessage[], right: LoveMessage[]) {
   return Array.from(new Map([...left, ...right].map((message) => [message.id, message])).values()).sort((a, b) => a.createdAt - b.createdAt);
+}
+
+function getClientId() {
+  const key = "love-room-client-id";
+  const saved = localStorage.getItem(key);
+  if (saved) return saved;
+  const id = crypto.randomUUID();
+  localStorage.setItem(key, id);
+  return id;
 }
 
 function compressImageFile(file: File): Promise<string> {
@@ -625,7 +750,27 @@ function ProfileCard({
   );
 }
 
-function MessageBubble({ message, mine }: { message: LoveMessage; mine: boolean }) {
+function MessageBubble({
+  message,
+  mine,
+  canEdit,
+  onEdit,
+  onDelete
+}: {
+  message: LoveMessage;
+  mine: boolean;
+  canEdit: boolean;
+  onEdit: (message: LoveMessage, nextText: string) => void;
+  onDelete: (message: LoveMessage) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(message.text);
+
+  async function saveEdit() {
+    await onEdit(message, draft);
+    setEditing(false);
+  }
+
   return (
     <article className={`flex ${mine ? "justify-end" : "justify-start"}`}>
       <div className={`max-w-[82%] rounded-lg px-4 py-3 shadow-sm ${mine ? "bg-[color:var(--theme-primary)] text-white" : "bg-white text-ink"}`}>
@@ -633,11 +778,36 @@ function MessageBubble({ message, mine }: { message: LoveMessage; mine: boolean 
           {message.kind === "location" ? <MapPin className="h-3 w-3" /> : null}
           <span>{message.sender}</span>
           <span>{new Date(message.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
+          {message.edited ? <span>edited</span> : null}
         </div>
         {message.mediaUrl ? (
           <Image src={message.mediaUrl} alt="" width={720} height={960} unoptimized className="mb-2 max-h-80 w-full rounded-md object-cover" />
         ) : null}
-        <p className="whitespace-pre-wrap text-sm leading-6">{message.text}</p>
+        {editing ? (
+          <div className="space-y-2">
+            <textarea value={draft} onChange={(event) => setDraft(event.target.value)} className="min-h-20 w-full resize-none rounded-md px-3 py-2 text-sm text-ink" />
+            <div className="flex gap-2">
+              <button onClick={saveEdit} className="rounded-md bg-ink px-3 py-2 text-xs font-bold text-white">
+                Save
+              </button>
+              <button onClick={() => setEditing(false)} className="rounded-md bg-white/30 px-3 py-2 text-xs font-bold">
+                Cancel
+              </button>
+            </div>
+          </div>
+        ) : (
+          <p className="whitespace-pre-wrap text-sm leading-6">{message.text}</p>
+        )}
+        {canEdit && !editing ? (
+          <div className="mt-2 flex gap-2">
+            <button onClick={() => setEditing(true)} className="rounded-md bg-white/20 p-2" aria-label="Edit message">
+              <Edit3 className="h-3 w-3" />
+            </button>
+            <button onClick={() => onDelete(message)} className="rounded-md bg-white/20 p-2" aria-label="Delete message">
+              <Trash2 className="h-3 w-3" />
+            </button>
+          </div>
+        ) : null}
       </div>
     </article>
   );

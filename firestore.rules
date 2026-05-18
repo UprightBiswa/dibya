@@ -6,11 +6,18 @@ service cloud.firestore {
       allow read, create: if true;
       allow update: if !("ownerUid" in resource.data)
         || (request.auth != null && request.auth.uid == resource.data.ownerUid);
-      allow delete: if false;
+      allow delete: if request.auth != null && request.auth.uid == resource.data.ownerUid;
 
       match /messages/{messageId} {
         allow read, create: if true;
-        allow update, delete: if false;
+        allow update: if request.auth != null && request.auth.uid == get(/databases/$(database)/documents/rooms/$(roomId)).data.ownerUid
+          || request.resource.data.senderId == resource.data.senderId;
+        allow delete: if true;
+      }
+
+      match /participants/{participantId} {
+        allow read, create, update: if true;
+        allow delete: if request.auth != null && request.auth.uid == get(/databases/$(database)/documents/rooms/$(roomId)).data.ownerUid;
       }
     }
   }
