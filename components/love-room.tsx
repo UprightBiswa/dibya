@@ -49,11 +49,12 @@ import type { LoveMessage, Participant, SharedRoom, ThemeName } from "@/lib/type
 type Props = {
   roomId: string;
   onBack?: () => void;
+  embedded?: boolean;
 };
 
 const quickNotes = ["Thinking of you", "Proud of you", "Drink water", "Rest a little", "Sending a hug"];
 
-export function LoveRoom({ roomId, onBack }: Props) {
+export function LoveRoom({ roomId, onBack, embedded = false }: Props) {
   const [room, setRoom] = useState<SharedRoom>({ ...defaultRoom, id: roomId });
   const [messages, setMessages] = useState<LoveMessage[]>([]);
   const [olderCursor, setOlderCursor] = useState<QueryDocumentSnapshot<DocumentData> | null>(null);
@@ -116,6 +117,15 @@ export function LoveRoom({ roomId, onBack }: Props) {
   }, [roomId]);
 
   useEffect(() => {
+    setRoom({ ...defaultRoom, id: roomId });
+    setMessages([]);
+    setParticipants([]);
+    setSelectedUser(null);
+    setOlderCursor(null);
+    setLoadingOlder(false);
+    setAuthError("");
+    setIsReady(false);
+
     if (!hasFirebaseConfig || !db) {
       setRoom(readLocalRoom(roomId));
       setMessages(readLocalMessages(roomId));
@@ -167,7 +177,7 @@ export function LoveRoom({ roomId, onBack }: Props) {
             } as LoveMessage;
           })
           .reverse();
-        setMessages((current) => mergeMessages(current.filter((item) => !latest.some((next) => next.id === item.id)), latest));
+        setMessages((current) => mergeMessages(current.filter((item) => item.roomId === roomId && !latest.some((next) => next.id === item.id)), latest));
       },
       (error) => setAuthError(error.message)
     );
@@ -234,6 +244,33 @@ export function LoveRoom({ roomId, onBack }: Props) {
       { merge: true }
     );
   }, [currentProfile, isMember, isReady, roomId, user]);
+
+  useEffect(() => {
+    if (!db || !user || !isMember || !isReady) return;
+    if (!("geolocation" in navigator)) return;
+    const key = `location-permission-asked:${roomId}:${user.uid}`;
+    if (localStorage.getItem(key)) return;
+    localStorage.setItem(key, "yes");
+    navigator.geolocation.getCurrentPosition(
+      async (position) => {
+        const { latitude, longitude, accuracy } = position.coords;
+        let address = "Address lookup unavailable";
+        try {
+          const response = await fetch(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${latitude}&lon=${longitude}`);
+          const data = await response.json();
+          address = data.display_name ?? address;
+        } catch {
+          address = "Only latitude and longitude shared";
+        }
+        await saveParticipant({
+          locationText: `${latitude.toFixed(6)}, ${longitude.toFixed(6)}. Accuracy ${Math.round(accuracy)}m. ${address}`,
+          locationUpdatedAt: Date.now()
+        });
+      },
+      () => undefined,
+      { enableHighAccuracy: true, timeout: 12000 }
+    );
+  }, [isMember, isReady, roomId, user]);
 
   useEffect(() => {
     if (selectedUser || participants.length === 0) return;
@@ -369,7 +406,7 @@ export function LoveRoom({ roomId, onBack }: Props) {
           } as LoveMessage;
         })
         .reverse();
-      setMessages((current) => mergeMessages(items, current));
+      setMessages((current) => mergeMessages(items, current.filter((item) => item.roomId === roomId)));
     } finally {
       setLoadingOlder(false);
     }
@@ -510,8 +547,13 @@ export function LoveRoom({ roomId, onBack }: Props) {
   }
 
   return (
-    <main className="min-h-screen px-3 py-3 sm:px-5 lg:px-6">
-      <section className="mx-auto grid max-w-7xl gap-3 lg:h-[calc(100vh-1.5rem)] lg:grid-cols-[320px_minmax(0,1fr)_320px]">
+    <main className={embedded ? "h-full min-h-0" : "min-h-screen px-3 py-3 sm:px-5 lg:px-6"}>
+      <section
+        className={`grid gap-3 ${
+          embedded ? "h-full min-h-0 lg:grid-cols-[minmax(0,1fr)_320px]" : "mx-auto max-w-7xl lg:h-[calc(100vh-1.5rem)] lg:grid-cols-[320px_minmax(0,1fr)_320px]"
+        }`}
+      >
+        {!embedded ? (
         <aside className="glass flex min-h-[18rem] flex-col rounded-lg p-3 shadow-soft lg:h-full">
           <div className="flex items-center justify-between gap-3 p-2">
             <div>
@@ -542,6 +584,7 @@ export function LoveRoom({ roomId, onBack }: Props) {
               </div>
           ) : null}
         </aside>
+        ) : null}
 
         <section className="glass flex min-h-[76vh] min-w-0 flex-col overflow-hidden rounded-lg shadow-soft lg:h-full">
           <div className="shrink-0 border-b border-ink/10 p-4">

@@ -2,7 +2,6 @@
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import Image from "next/image";
-import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { GoogleAuthProvider, onAuthStateChanged, signInWithPopup, signOut, type User } from "firebase/auth";
 import { collection, doc, getDoc, getDocs, onSnapshot, query, serverTimestamp, setDoc, updateDoc, where } from "firebase/firestore";
@@ -52,6 +51,7 @@ export function HomeShell() {
   const router = useRouter();
   const roomId = params.get("room");
   const inviteId = params.get("invite");
+  const [selectedRoomId, setSelectedRoomId] = useState(roomId || "");
   const [user, setUser] = useState<User | null>(null);
   const [rooms, setRooms] = useState<SharedRoom[]>([]);
   const [search, setSearch] = useState("");
@@ -160,6 +160,10 @@ export function HomeShell() {
     });
   }, [inviteId, profile, router, user]);
 
+  useEffect(() => {
+    if (roomId) setSelectedRoomId(roomId);
+  }, [roomId]);
+
   const appUrl = typeof window === "undefined" ? "" : window.location.origin;
   const filteredRooms = rooms.filter((room) => roomTitle(room, user?.uid).toLowerCase().includes(search.toLowerCase()));
   const filteredUsers = useMemo(() => {
@@ -252,7 +256,9 @@ export function HomeShell() {
     if (!db || !user || !profile) return;
     const roomIdForPair = pairId(user.uid, targetUser.uid);
     if (rooms.some((room) => room.id === roomIdForPair)) {
-      router.push(`/?room=${roomIdForPair}`);
+      setSelectedRoomId(roomIdForPair);
+      setActiveTab("chats");
+      router.replace("/");
       return;
     }
     const id = roomIdForPair;
@@ -295,17 +301,15 @@ export function HomeShell() {
     });
     await updateDoc(doc(db, "invites", invite.id), { status: "accepted", roomId: id, acceptedAt: serverTimestamp(), updatedAt: Date.now() });
     playTone("success");
-    router.push(`/?room=${id}`);
+    setSelectedRoomId(id);
+    setActiveTab("chats");
+    router.replace("/");
   }
 
   async function declineInvite(invite: ChatInvite) {
     if (!db) return;
     await updateDoc(doc(db, "invites", invite.id), { status: "declined", declinedAt: serverTimestamp(), updatedAt: Date.now() });
     playTone("tap");
-  }
-
-  if (roomId) {
-    return <LoveRoom roomId={roomId} onBack={() => (window.location.href = "/")} />;
   }
 
   if (!user) {
@@ -410,7 +414,14 @@ export function HomeShell() {
               <>
                 {rooms.length === 0 ? <EmptyState title="No chats yet" text="Find a user, send a request, or accept one from Requests." /> : null}
                 {filteredRooms.map((room) => (
-                  <ChatRow key={room.id} room={room} uid={user.uid} onDelete={() => deleteRoom(room.id)} />
+                  <ChatRow
+                    key={room.id}
+                    room={room}
+                    uid={user.uid}
+                    active={selectedRoomId === room.id}
+                    onOpen={() => setSelectedRoomId(room.id)}
+                    onDelete={() => deleteRoom(room.id)}
+                  />
                 ))}
               </>
             ) : null}
@@ -497,6 +508,11 @@ export function HomeShell() {
           </div>
         </aside>
 
+        {selectedRoomId ? (
+          <section className="min-h-[calc(100vh-1.5rem)] min-w-0">
+            <LoveRoom roomId={selectedRoomId} embedded onBack={() => setSelectedRoomId("")} />
+          </section>
+        ) : (
         <section className="hidden overflow-hidden rounded-lg bg-ink text-white shadow-soft lg:block">
           <div className="flex h-full flex-col justify-between p-8">
             <div>
@@ -516,6 +532,7 @@ export function HomeShell() {
             </div>
           </div>
         </section>
+        )}
       </section>
 
       {notice ? (
@@ -564,17 +581,29 @@ function Avatar({ name, photoUrl }: { name: string; photoUrl?: string }) {
   return <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-ink text-sm font-black text-white">{initials(name)}</div>;
 }
 
-function ChatRow({ room, uid, onDelete }: { room: SharedRoom; uid: string; onDelete: () => void }) {
+function ChatRow({
+  room,
+  uid,
+  active,
+  onOpen,
+  onDelete
+}: {
+  room: SharedRoom;
+  uid: string;
+  active: boolean;
+  onOpen: () => void;
+  onDelete: () => void;
+}) {
   const profile = otherProfile(room, uid);
   return (
-    <div className="group rounded-lg bg-white/75 p-3">
+    <div className={`group rounded-lg p-3 ${active ? "bg-ink text-white" : "bg-white/75"}`}>
       <div className="flex items-center gap-3">
         <Avatar name={profile.name} photoUrl={profile.photoUrl} />
-        <Link href={`/?room=${room.id}`} className="min-w-0 flex-1">
-          <p className="truncate text-sm font-black text-ink">{roomTitle(room, uid)}</p>
-          <p className="truncate text-xs text-ink/55">{room.lastMessage || "Open chat"}</p>
-        </Link>
-        <button onClick={onDelete} className="rounded-md border border-ink/10 bg-white p-2 text-ink opacity-100 lg:opacity-0 lg:group-hover:opacity-100" aria-label="Delete chat">
+        <button onClick={onOpen} className="min-w-0 flex-1 text-left">
+          <p className={`truncate text-sm font-black ${active ? "text-white" : "text-ink"}`}>{roomTitle(room, uid)}</p>
+          <p className={`truncate text-xs ${active ? "text-white/60" : "text-ink/55"}`}>{room.lastMessage || "Open chat"}</p>
+        </button>
+        <button onClick={onDelete} className="rounded-md border border-ink/10 bg-white p-2 text-ink opacity-100 lg:opacity-0 lg:group-hover:opacity-100" aria-label="Close chat">
           <Trash2 className="h-3 w-3" />
         </button>
       </div>
