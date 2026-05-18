@@ -5,7 +5,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { GoogleAuthProvider, onAuthStateChanged, signInWithPopup, signOut, type User } from "firebase/auth";
-import { collection, deleteDoc, doc, getDoc, getDocs, onSnapshot, query, serverTimestamp, setDoc, updateDoc, where, writeBatch } from "firebase/firestore";
+import { collection, doc, getDoc, getDocs, onSnapshot, query, serverTimestamp, setDoc, updateDoc, where } from "firebase/firestore";
 import {
   Bell,
   Check,
@@ -62,6 +62,7 @@ export function HomeShell() {
   const [photoUrl, setPhotoUrl] = useState("");
   const [findUsername, setFindUsername] = useState("");
   const [foundUser, setFoundUser] = useState<AppUser | null>(null);
+  const [selectedProfile, setSelectedProfile] = useState<AppUser | null>(null);
   const [allUsers, setAllUsers] = useState<AppUser[]>([]);
   const [invites, setInvites] = useState<ChatInvite[]>([]);
   const [sentInvites, setSentInvites] = useState<ChatInvite[]>([]);
@@ -121,8 +122,8 @@ export function HomeShell() {
       setPhotoUrl(data.photoUrl || "");
     });
 
-    const unsubInvites = onSnapshot(query(collection(db, "invites"), where("toUid", "==", user.uid), where("status", "==", "pending")), (snap) => {
-      const next = snap.docs.map((item) => ({ id: item.id, ...item.data() }) as ChatInvite);
+    const unsubInvites = onSnapshot(query(collection(db, "invites"), where("toUid", "==", user.uid)), (snap) => {
+      const next = snap.docs.map((item) => ({ id: item.id, ...item.data() }) as ChatInvite).filter((item) => item.status === "pending");
       if (next.length > invites.length) playTone("success");
       setInvites(next);
     });
@@ -210,13 +211,7 @@ export function HomeShell() {
 
   async function deleteRoom(roomIdToDelete: string) {
     if (!db) return;
-    const batch = writeBatch(db);
-    const messages = await getDocs(collection(db, "rooms", roomIdToDelete, "messages"));
-    const participants = await getDocs(collection(db, "rooms", roomIdToDelete, "participants"));
-    messages.docs.forEach((item) => batch.delete(item.ref));
-    participants.docs.forEach((item) => batch.delete(item.ref));
-    await batch.commit();
-    await deleteDoc(doc(db, "rooms", roomIdToDelete));
+    await setDoc(doc(db, "rooms", roomIdToDelete), { deleted: true, closedAt: Date.now(), lastMessage: "Connection closed." }, { merge: true });
     playTone("tap");
   }
 
@@ -256,8 +251,7 @@ export function HomeShell() {
   async function sendInviteTo(targetUser: AppUser) {
     if (!db || !user || !profile) return;
     const roomIdForPair = pairId(user.uid, targetUser.uid);
-    const existingRoom = await getDoc(doc(db, "rooms", roomIdForPair));
-    if (existingRoom.exists()) {
+    if (rooms.some((room) => room.id === roomIdForPair)) {
       router.push(`/?room=${roomIdForPair}`);
       return;
     }
@@ -433,6 +427,7 @@ export function HomeShell() {
                     status={relationStatus(foundUser.uid, rooms, sentInvites, invites, user.uid)}
                     onAction={() => sendInviteTo(foundUser)}
                     onShare={() => shareRequest(foundUser, sentInvites.find((invite) => invite.id === pairId(user.uid, foundUser.uid)))}
+                    onOpen={() => setSelectedProfile(foundUser)}
                   />
                 ) : null}
                 {filteredUsers.length === 0 ? <EmptyState title="No users found" text="Share the app with someone. After they login, they show here." /> : null}
@@ -443,6 +438,7 @@ export function HomeShell() {
                     status={relationStatus(item.uid, rooms, sentInvites, invites, user.uid)}
                     onAction={() => sendInviteTo(item)}
                     onShare={() => shareRequest(item, sentInvites.find((invite) => invite.id === pairId(user.uid, item.uid)))}
+                    onOpen={() => setSelectedProfile(item)}
                   />
                 ))}
               </>
@@ -527,6 +523,8 @@ export function HomeShell() {
           {notice}
         </button>
       ) : null}
+
+      {selectedProfile ? <ProfileSheet user={selectedProfile} onClose={() => setSelectedProfile(null)} /> : null}
     </main>
   );
 }
@@ -597,23 +595,27 @@ function UserRow({
   user,
   status,
   onAction,
-  onShare
+  onShare,
+  onOpen
 }: {
   user: AppUser;
   status: "none" | "connected" | "sent" | "incoming" | "accepted" | "declined";
   onAction: () => void;
   onShare: () => void;
+  onOpen: () => void;
 }) {
   const actionLabel = status === "connected" || status === "accepted" ? "Connected" : status === "sent" ? "Sent" : status === "declined" ? "Send again" : "Request";
   return (
     <div className="rounded-lg bg-white/75 p-3">
       <div className="flex items-center gap-3">
-        <Avatar name={user.name || user.username} photoUrl={user.photoUrl} />
-        <div className="min-w-0 flex-1">
+        <button onClick={onOpen} className="shrink-0" aria-label={`Open ${user.name || user.username} profile`}>
+          <Avatar name={user.name || user.username} photoUrl={user.photoUrl} />
+        </button>
+        <button onClick={onOpen} className="min-w-0 flex-1 text-left">
           <p className="truncate text-sm font-black text-ink">{user.name || user.username}</p>
           <p className="truncate text-xs text-ink/55">@{user.username}</p>
           {user.bio ? <p className="mt-1 line-clamp-2 text-xs leading-5 text-ink/65">{user.bio}</p> : null}
-        </div>
+        </button>
         <button
           onClick={onAction}
           disabled={status === "connected" || status === "accepted" || status === "sent"}
@@ -627,6 +629,32 @@ function UserRow({
             Link
           </button>
         ) : null}
+      </div>
+    </div>
+  );
+}
+
+function ProfileSheet({ user, onClose }: { user: AppUser; onClose: () => void }) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-end justify-center bg-ink/55 p-3 sm:items-center">
+      <div className="glass w-full max-w-md rounded-lg p-5 shadow-soft">
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex min-w-0 items-center gap-3">
+            <Avatar name={user.name || user.username} photoUrl={user.photoUrl} />
+            <div className="min-w-0">
+              <p className="truncate text-lg font-black text-ink">{user.name || user.username}</p>
+              <p className="truncate text-xs font-bold text-ink/55">@{user.username}</p>
+            </div>
+          </div>
+          <button onClick={onClose} className="rounded-md border border-ink/10 bg-white p-2 text-ink" aria-label="Close profile">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        <div className="mt-4 space-y-2 text-sm leading-6 text-ink/70">
+          <p className="rounded-md bg-white/75 p-3">{user.bio || "No bio added yet."}</p>
+          <p className="rounded-md bg-white/75 p-3">Role: {user.role || "Member"}</p>
+          <p className="rounded-md bg-white/75 p-3">Device and location details appear only inside a shared chat after that user presses the share buttons.</p>
+        </div>
       </div>
     </div>
   );

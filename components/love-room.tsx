@@ -1,7 +1,8 @@
 "use client";
 
-import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { ChangeEvent, FormEvent, useEffect, useRef, useState } from "react";
 import Image from "next/image";
+import Link from "next/link";
 import { GoogleAuthProvider, onAuthStateChanged, signInWithPopup, type User } from "firebase/auth";
 import {
   Camera,
@@ -16,7 +17,7 @@ import {
   Send,
   Sparkles,
   Trash2,
-  UserRound,
+  Users,
   Video,
   X
 } from "lucide-react";
@@ -36,13 +37,14 @@ import {
   serverTimestamp,
   setDoc,
   startAfter,
-  updateDoc
+  updateDoc,
+  where
 } from "firebase/firestore";
 import { auth, db, hasFirebaseConfig } from "@/lib/firebase";
 import { defaultRoom, gifts, loveQuotes, themes } from "@/lib/room-data";
 import { readLocalMessages, readLocalRoom, writeLocalMessages, writeLocalRoom } from "@/lib/local-store";
 import { useAppStore } from "@/lib/app-store";
-import type { LoveMessage, Participant, Profile, SharedRoom, ThemeName } from "@/lib/types";
+import type { LoveMessage, Participant, SharedRoom, ThemeName } from "@/lib/types";
 
 type Props = {
   roomId: string;
@@ -61,6 +63,8 @@ export function LoveRoom({ roomId, onBack }: Props) {
   const [guestBio, setGuestBio] = useState("");
   const [guestPhotoUrl, setGuestPhotoUrl] = useState("");
   const [participants, setParticipants] = useState<Participant[]>([]);
+  const [selectedUser, setSelectedUser] = useState<Participant | null>(null);
+  const [chatRooms, setChatRooms] = useState<SharedRoom[]>([]);
   const [text, setText] = useState("");
   const [cameraOpen, setCameraOpen] = useState(false);
   const [isReady, setIsReady] = useState(false);
@@ -81,7 +85,6 @@ export function LoveRoom({ roomId, onBack }: Props) {
   const otherProfile = isOwner || isLegacyRoom ? room.profiles.peer : room.profiles.owner;
   const receiver = isOwner || isLegacyRoom ? "peer" : "owner";
   const theme = themes[room.theme];
-  const canManageRoom = isOwner || isLegacyRoom;
   const actorId = user?.uid || clientIdRef.current;
   const myScore = room.gameScore?.[actorId] ?? 0;
   const otherId = isOwner ? room.peerUid : room.ownerUid;
@@ -185,6 +188,21 @@ export function LoveRoom({ roomId, onBack }: Props) {
   }, [authReady, roomId, user]);
 
   useEffect(() => {
+    if (!db || !user) {
+      setChatRooms([]);
+      return;
+    }
+    return onSnapshot(query(collection(db, "rooms"), where("participantUids", "array-contains", user.uid)), (snap) => {
+      setChatRooms(
+        snap.docs
+          .map((item) => ({ id: item.id, ...item.data() }) as SharedRoom)
+          .filter((item) => !item.deleted)
+          .sort((a, b) => (b.lastMessageAt ?? b.createdAt ?? 0) - (a.lastMessageAt ?? a.createdAt ?? 0))
+      );
+    });
+  }, [user]);
+
+  useEffect(() => {
     if (!cameraOpen || !streamRef.current || !videoRef.current) return;
     videoRef.current.srcObject = streamRef.current;
     videoRef.current.play().catch(() => undefined);
@@ -217,9 +235,11 @@ export function LoveRoom({ roomId, onBack }: Props) {
     );
   }, [currentProfile, isMember, isReady, roomId, user]);
 
-  const roomIntro = useMemo(() => {
-    return `${room.profiles.owner.name} and ${room.profiles.peer.name} share this private chat.`;
-  }, [room.profiles]);
+  useEffect(() => {
+    if (selectedUser || participants.length === 0) return;
+    const firstChoice = participants.find((item) => item.id === otherId) || participants.find((item) => item.id !== actorId) || participants[0];
+    setSelectedUser(firstChoice);
+  }, [actorId, otherId, participants, selectedUser]);
 
   async function saveRoom(nextRoom: SharedRoom) {
     setRoom(nextRoom);
@@ -288,18 +308,6 @@ export function LoveRoom({ roomId, onBack }: Props) {
   async function deleteMessage(message: LoveMessage) {
     if (!db) return;
     await deleteDoc(doc(db, "rooms", roomId, "messages", message.id));
-  }
-
-  async function updateProfile(person: "owner" | "peer", field: keyof Profile, value: string) {
-    if (!isMember) return;
-    const nextRoom = {
-      ...room,
-      profiles: {
-        ...room.profiles,
-        [person]: { ...room.profiles[person], [field]: value }
-      }
-    };
-    await saveRoom(nextRoom);
   }
 
   async function changeTheme(nextTheme: ThemeName) {
@@ -467,7 +475,7 @@ export function LoveRoom({ roomId, onBack }: Props) {
     );
   }
 
-  if (room.ownerUid && !user) {
+  if (hasFirebaseConfig && authReady && !user) {
     return (
       <main className="flex min-h-screen items-center justify-center p-6">
         <div className="glass w-full max-w-md rounded-lg p-5 text-center shadow-soft">
@@ -483,90 +491,76 @@ export function LoveRoom({ roomId, onBack }: Props) {
     );
   }
 
+  if (authError) {
+    return (
+      <main className="flex min-h-screen items-center justify-center p-6">
+        <div className="glass w-full max-w-md rounded-lg p-5 text-center shadow-soft">
+          <Heart className="mx-auto h-10 w-10 fill-[color:var(--theme-primary)] text-[color:var(--theme-primary)]" />
+          <h1 className="mt-3 text-2xl font-black text-ink">You do not have access to this chat</h1>
+          <p className="mt-2 text-sm leading-6 text-ink/60">Only the two connected users can open this room. Ask the other person to send or accept a request.</p>
+          <p className="mt-3 rounded-md bg-white/75 p-3 text-xs font-bold text-ink/55">{authError}</p>
+          {onBack ? (
+            <button onClick={onBack} className="mt-4 w-full rounded-md bg-ink px-4 py-3 text-sm font-bold text-white">
+              Back to dashboard
+            </button>
+          ) : null}
+        </div>
+      </main>
+    );
+  }
+
   return (
     <main className="min-h-screen px-3 py-3 sm:px-5 lg:px-6">
-      <section className="mx-auto grid max-w-7xl gap-3 lg:h-[calc(100vh-1.5rem)] lg:grid-cols-[310px_minmax(0,1fr)_310px]">
-        <aside className="space-y-4">
-          <div className="glass rounded-lg p-5 shadow-soft">
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <p className="text-xs font-bold uppercase tracking-wider text-[color:var(--theme-secondary)]">Active chat</p>
-                <h1 className="mt-1 text-3xl font-black text-ink">{room.partnerName || room.profiles.peer.name}</h1>
-              </div>
-              <Heart className="h-8 w-8 fill-[color:var(--theme-primary)] text-[color:var(--theme-primary)]" />
+      <section className="mx-auto grid max-w-7xl gap-3 lg:h-[calc(100vh-1.5rem)] lg:grid-cols-[320px_minmax(0,1fr)_320px]">
+        <aside className="glass flex min-h-[18rem] flex-col rounded-lg p-3 shadow-soft lg:h-full">
+          <div className="flex items-center justify-between gap-3 p-2">
+            <div>
+              <p className="text-sm font-black text-ink">Chats</p>
+              <p className="text-xs text-ink/55">Your connected rooms</p>
             </div>
-            <p className="mt-3 text-sm leading-6 text-ink/70">{roomIntro}</p>
-            <div className="mt-4 grid gap-2">
-              {onBack ? (
-                <button onClick={onBack} className="rounded-md border border-ink/10 bg-white px-4 py-3 text-sm font-bold text-ink">
-                  Back to dashboard
-                </button>
-              ) : null}
-            </div>
-          </div>
-
-          {isMember ? (
-            <>
-              <ProfileCard
-                title="You"
-                profile={currentProfile}
-                participant={participants.find((item) => item.id === actorId)}
-                active
-                onChange={isMember ? (field, value) => updateProfile(isOwner ? "owner" : "peer", field, value) : undefined}
-              />
-              <ProfileCard title="Other user" profile={otherProfile} participant={participants.find((item) => item.id === otherId)} />
-            </>
-          ) : isPeer ? null : (
-            <div className="glass rounded-lg p-4 shadow-soft">
-              <p className="mb-2 text-sm font-black text-ink">Join as</p>
-              <input
-                value={guestName}
-                onChange={(event) => {
-                  setGuestName(event.target.value);
-                  localStorage.setItem(`guest-name:${roomId}`, event.target.value);
-                }}
-                className="w-full rounded-md border border-ink/10 bg-white px-3 py-3 text-sm font-bold text-ink"
-                placeholder="Your name"
-              />
-              <textarea
-                value={guestBio}
-                onChange={(event) => {
-                  setGuestBio(event.target.value);
-                  localStorage.setItem(`guest-bio:${roomId}`, event.target.value);
-                }}
-                className="mt-2 min-h-20 w-full resize-none rounded-md border border-ink/10 bg-white px-3 py-3 text-sm text-ink"
-                placeholder="Bio"
-              />
-              <input
-                value={guestPhotoUrl}
-                onChange={(event) => {
-                  setGuestPhotoUrl(event.target.value);
-                  localStorage.setItem(`guest-photo:${roomId}`, event.target.value);
-                }}
-                className="mt-2 w-full rounded-md border border-ink/10 bg-white px-3 py-3 text-sm text-ink"
-                placeholder="Photo URL"
-              />
-              <button onClick={() => saveParticipant()} className="mt-2 w-full rounded-md bg-ink px-3 py-3 text-sm font-bold text-white">
-                Save my info
+            {onBack ? (
+              <button onClick={onBack} className="rounded-md border border-ink/10 bg-white px-3 py-2 text-xs font-bold text-ink">
+                Home
               </button>
-            </div>
-          )}
+            ) : null}
+          </div>
+          {user ? (
+              <div className="no-scrollbar min-h-0 flex-1 space-y-2 overflow-y-auto">
+                {chatRooms.map((item) => {
+                  const profile = item.peerUid === user.uid ? item.profiles.owner : item.profiles.peer;
+                  return (
+                    <Link key={item.id} href={`/?room=${item.id}`} className={`flex items-center gap-3 rounded-md p-3 ${item.id === roomId ? "bg-ink text-white" : "bg-white/75 text-ink"}`}>
+                      <Avatar name={profile.name} photoUrl={profile.photoUrl} />
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-sm font-black">{profile.name}</p>
+                        <p className={`truncate text-xs ${item.id === roomId ? "text-white/60" : "text-ink/55"}`}>{item.lastMessage || "Open chat"}</p>
+                      </div>
+                    </Link>
+                  );
+                })}
+                {chatRooms.length === 0 ? <p className="rounded-md bg-white/70 p-3 text-xs leading-5 text-ink/55">No connected chats yet.</p> : null}
+              </div>
+          ) : null}
         </aside>
 
         <section className="glass flex min-h-[76vh] min-w-0 flex-col overflow-hidden rounded-lg shadow-soft lg:h-full">
           <div className="shrink-0 border-b border-ink/10 p-4">
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <div>
-                <p className="flex items-center gap-2 text-sm font-bold text-[color:var(--theme-primary)]">
-                  <Sparkles className="h-4 w-4" />
-                  Room prompt
-                </p>
-                <p className="mt-1 text-lg font-bold leading-7 text-ink">{room.quoteOfDay}</p>
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex min-w-0 items-center gap-3">
+                <Avatar name={otherProfile.name} photoUrl={otherProfile.photoUrl} />
+                <div className="min-w-0">
+                  <p className="truncate text-base font-black text-ink">{otherProfile.name}</p>
+                  <p className="truncate text-xs text-ink/55">{otherProfile.role || "Connected user"}</p>
+                </div>
               </div>
-              <button onClick={changeQuote} className="rounded-md border border-ink/15 px-4 py-2 text-sm font-bold text-ink">
-                  New prompt
+              <button onClick={changeQuote} className="rounded-md border border-ink/15 bg-white px-3 py-2 text-xs font-bold text-ink">
+                Prompt
               </button>
             </div>
+            <p className="mt-3 flex items-center gap-2 text-sm font-bold leading-6 text-[color:var(--theme-primary)]">
+              <Sparkles className="h-4 w-4 shrink-0" />
+              {room.quoteOfDay}
+            </p>
           </div>
 
           <div ref={listRef} className="no-scrollbar min-h-0 flex-1 space-y-3 overflow-y-auto p-4">
@@ -590,7 +584,7 @@ export function LoveRoom({ roomId, onBack }: Props) {
                 <MessageBubble
                   key={message.id}
                   message={message}
-                  mine={message.senderId === clientIdRef.current || message.sender === currentProfile.name}
+                  mine={message.senderId === actorId}
                   canEdit={message.senderId === actorId}
                   onEdit={editMessage}
                   onDelete={deleteMessage}
@@ -626,25 +620,50 @@ export function LoveRoom({ roomId, onBack }: Props) {
         </section>
 
         <aside className="space-y-3 overflow-y-auto">
+          {/* WhatsApp-style user list */}
           <div className="glass rounded-lg p-4 shadow-soft">
             <p className="mb-3 flex items-center gap-2 text-sm font-black text-ink">
-              <UserRound className="h-4 w-4" />
-              You are chatting as
+              <Users className="h-4 w-4" />
+              Room users
             </p>
-            <div className="flex items-center gap-3 rounded-md bg-white px-3 py-3">
-              <Avatar name={currentProfile.name || "Me"} photoUrl={currentProfile.photoUrl} />
-              <div className="min-w-0">
-                <p className="truncate text-sm font-black text-ink">{currentProfile.name || "Member"}</p>
-                <p className="truncate text-xs text-ink/55">{isMember ? "Logged-in member" : "Guest"}</p>
-              </div>
+            <div className="space-y-2">
+              {participants.map((person) => (
+                <button
+                  key={person.id}
+                  onClick={() => setSelectedUser(person)}
+                  className={`w-full flex items-center gap-3 rounded-md px-3 py-2 text-left ${selectedUser?.id === person.id ? "bg-ink/10" : "bg-white/75"}`}
+                >
+                  <Avatar name={person.name} photoUrl={person.photoUrl} />
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-black text-ink">{person.name}</p>
+                    <p className="truncate text-xs text-ink/55">{person.role || "Member"}</p>
+                  </div>
+                </button>
+              ))}
             </div>
-            <p className="mt-2 text-xs leading-5 text-ink/55">Location and device details are shared only when you press their buttons.</p>
           </div>
+
+          {/* Selected user profile view */}
+          {selectedUser && (
+            <div className="glass rounded-lg p-4 shadow-soft">
+              <div className="flex items-center gap-3 mb-2">
+                <Avatar name={selectedUser.name} photoUrl={selectedUser.photoUrl} />
+                <div>
+                  <p className="text-lg font-black text-ink">{selectedUser.name}</p>
+                  <p className="text-xs text-ink/55">{selectedUser.role || "Member"}</p>
+                </div>
+              </div>
+              {selectedUser.bio && <p className="mb-2 text-xs text-ink/70">{selectedUser.bio}</p>}
+              {selectedUser.locationText && <p className="mb-1 text-xs text-ink/70">Location: {selectedUser.locationText}</p>}
+              {selectedUser.deviceText && <p className="mb-1 text-xs text-ink/70 break-words">Device: {selectedUser.deviceText}</p>}
+              <button onClick={() => setSelectedUser(null)} className="mt-2 rounded-md border border-ink/10 px-3 py-2 text-xs font-bold text-ink">Close</button>
+            </div>
+          )}
 
           <div className="glass rounded-lg p-4 shadow-soft">
             <p className="mb-3 flex items-center gap-2 text-sm font-black text-ink">
               <Gift className="h-4 w-4" />
-              Reactions and gifts
+              Gifts
             </p>
             <div className="grid grid-cols-2 gap-2">
               {gifts.map((gift) => (
@@ -663,7 +682,7 @@ export function LoveRoom({ roomId, onBack }: Props) {
           <div className="glass rounded-lg p-4 shadow-soft">
             <p className="mb-3 flex items-center gap-2 text-sm font-black text-ink">
               <Camera className="h-4 w-4" />
-              Photos and consent shares
+              Photos and shares
             </p>
             <div className="grid gap-2">
               <label className="flex cursor-pointer items-center justify-center gap-2 rounded-md border border-ink/10 bg-white px-3 py-3 text-sm font-bold text-ink">
@@ -675,35 +694,14 @@ export function LoveRoom({ roomId, onBack }: Props) {
                 <Video className="h-4 w-4" />
                 Open camera
               </button>
-              <button
-                onClick={shareLocation}
-                className="flex items-center justify-center gap-2 rounded-md border border-ink/10 bg-white px-3 py-3 text-sm font-bold text-ink"
-              >
+              <button onClick={shareLocation} className="flex items-center justify-center gap-2 rounded-md border border-ink/10 bg-white px-3 py-3 text-sm font-bold text-ink">
                 <LocateFixed className="h-4 w-4" />
                 Share my location
               </button>
-              <button
-                onClick={shareDevice}
-                className="flex items-center justify-center gap-2 rounded-md border border-ink/10 bg-white px-3 py-3 text-sm font-bold text-ink"
-              >
+              <button onClick={shareDevice} className="flex items-center justify-center gap-2 rounded-md border border-ink/10 bg-white px-3 py-3 text-sm font-bold text-ink">
                 <MonitorSmartphone className="h-4 w-4" />
                 Share device details
               </button>
-            </div>
-          </div>
-
-          <div className="glass rounded-lg p-4 shadow-soft">
-            <p className="mb-3 text-sm font-black text-ink">Shared profile info</p>
-            {participants.length === 0 ? <p className="text-xs leading-5 text-ink/55">Location and device info appears here only after a user shares it.</p> : null}
-            <div className="space-y-2">
-              {participants.map((person) => (
-                <div key={person.id} className="rounded-md bg-white/75 p-3 text-xs leading-5 text-ink/70">
-                  <p className="text-sm font-black text-ink">{person.name}</p>
-                  {person.bio ? <p>{person.bio}</p> : null}
-                  {person.locationText ? <p>Location: {person.locationText}</p> : null}
-                  {person.deviceText ? <p className="break-words">Device: {person.deviceText}</p> : null}
-                </div>
-              ))}
             </div>
           </div>
 
@@ -746,6 +744,7 @@ export function LoveRoom({ roomId, onBack }: Props) {
             </div>
           </div>
         </aside>
+
       </section>
 
       {cameraOpen ? (
@@ -831,64 +830,6 @@ function Avatar({ name, photoUrl }: { name: string; photoUrl?: string }) {
     return <Image src={photoUrl} alt="" width={40} height={40} unoptimized className="h-10 w-10 shrink-0 rounded-full border border-white/70 object-cover" />;
   }
   return <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-ink text-sm font-black text-white">{initials(name)}</div>;
-}
-
-function ProfileCard({
-  title,
-  profile,
-  participant,
-  active,
-  onChange
-}: {
-  title: string;
-  profile: Profile;
-  participant?: Participant;
-  active?: boolean;
-  onChange?: (field: keyof Profile, value: string) => void;
-}) {
-  return (
-    <div className="glass rounded-lg p-4 shadow-soft">
-      <div className="mb-3 flex items-center gap-3">
-        <Avatar name={profile.name || title} photoUrl={profile.photoUrl} />
-        <div className="min-w-0">
-          <p className="truncate text-sm font-black text-ink">{title}</p>
-          <p className="truncate text-xs text-ink/55">{active ? "Active now" : participant?.lastActiveAt ? "Recently active" : "Waiting"}</p>
-        </div>
-      </div>
-      <div className="space-y-2">
-        <input
-          value={profile.name}
-          onChange={(event) => onChange?.("name", event.target.value)}
-          readOnly={!onChange}
-          className="w-full rounded-md border border-ink/10 bg-white px-3 py-2 text-sm font-bold text-ink"
-          placeholder="Name"
-        />
-        <input
-          value={profile.role}
-          onChange={(event) => onChange?.("role", event.target.value)}
-          readOnly={!onChange}
-          className="w-full rounded-md border border-ink/10 bg-white px-3 py-2 text-sm text-ink"
-          placeholder="Role"
-        />
-        <textarea
-          value={profile.bio}
-          onChange={(event) => onChange?.("bio", event.target.value)}
-          readOnly={!onChange}
-          className="min-h-20 w-full resize-none rounded-md border border-ink/10 bg-white px-3 py-2 text-sm leading-5 text-ink"
-          placeholder="Bio"
-        />
-        <input
-          value={profile.photoUrl}
-          onChange={(event) => onChange?.("photoUrl", event.target.value)}
-          readOnly={!onChange}
-          className="w-full rounded-md border border-ink/10 bg-white px-3 py-2 text-sm text-ink"
-          placeholder="Profile photo URL"
-        />
-        {participant?.locationText ? <p className="rounded-md bg-white/70 p-2 text-xs leading-5 text-ink/65">Location: {participant.locationText}</p> : null}
-        {participant?.deviceText ? <p className="rounded-md bg-white/70 p-2 text-xs leading-5 text-ink/65">Device: {participant.deviceText}</p> : null}
-      </div>
-    </div>
-  );
 }
 
 function MessageBubble({
