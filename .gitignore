@@ -5,6 +5,8 @@ dist/
 .env
 .env.local
 .vercel/
+.firebase/
+firebase-debug.log
 tsconfig.tsbuildinfo
 npm-debug.log*
 yarn-debug.log*

@@ -9,6 +9,11 @@ export type Profile = {
 
 export type SharedRoom = {
   id: string;
+  ownerUid?: string;
+  ownerEmail?: string;
+  partnerName?: string;
+  deleted?: boolean;
+  createdAt?: number;
   theme: ThemeName;
   quoteOfDay: string;
   profiles: {

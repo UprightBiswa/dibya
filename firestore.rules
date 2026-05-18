@@ -3,7 +3,10 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
     match /rooms/{roomId} {
-      allow read, write: if true;
+      allow read, create: if true;
+      allow update: if !("ownerUid" in resource.data)
+        || (request.auth != null && request.auth.uid == resource.data.ownerUid);
+      allow delete: if false;
 
       match /messages/{messageId} {
         allow read, create: if true;

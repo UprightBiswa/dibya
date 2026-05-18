@@ -2,6 +2,7 @@
 
 import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import Image from "next/image";
+import { onAuthStateChanged, type User } from "firebase/auth";
 import {
   Camera,
   Copy,
@@ -21,31 +22,38 @@ import {
 import {
   addDoc,
   collection,
+  type DocumentData,
+  type QueryDocumentSnapshot,
   doc,
   getDoc,
+  getDocs,
   limit,
   onSnapshot,
   orderBy,
   query,
   serverTimestamp,
-  setDoc
+  setDoc,
+  startAfter
 } from "firebase/firestore";
-import { db, hasFirebaseConfig } from "@/lib/firebase";
+import { auth, db, hasFirebaseConfig } from "@/lib/firebase";
 import { defaultRoom, gifts, loveQuotes, themes } from "@/lib/room-data";
 import { readLocalMessages, readLocalRoom, writeLocalMessages, writeLocalRoom } from "@/lib/local-store";
-import { useUiStore } from "@/lib/store";
 import type { LoveMessage, Profile, SharedRoom, ThemeName } from "@/lib/types";
 
 type Props = {
   roomId: string;
+  onBack?: () => void;
 };
 
 const quickNotes = ["I miss you", "Proud of you", "Drink water", "Rest a little", "Sending a hug"];
 
-export function LoveRoom({ roomId }: Props) {
-  const { sender, setSender } = useUiStore();
+export function LoveRoom({ roomId, onBack }: Props) {
   const [room, setRoom] = useState<SharedRoom>({ ...defaultRoom, id: roomId });
   const [messages, setMessages] = useState<LoveMessage[]>([]);
+  const [olderCursor, setOlderCursor] = useState<QueryDocumentSnapshot<DocumentData> | null>(null);
+  const [loadingOlder, setLoadingOlder] = useState(false);
+  const [user, setUser] = useState<User | null>(null);
+  const [guestName, setGuestName] = useState("");
   const [text, setText] = useState("");
   const [cameraOpen, setCameraOpen] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -55,16 +63,29 @@ export function LoveRoom({ roomId }: Props) {
   const streamRef = useRef<MediaStream | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
 
-  const receiver = sender === "biswajit" ? "dibya" : "biswajit";
-  const currentProfile = room.profiles[sender];
+  const isOwner = Boolean(user && room.ownerUid && user.uid === room.ownerUid);
+  const isLegacyRoom = !room.ownerUid;
+  const currentProfile = isOwner || isLegacyRoom ? room.profiles.biswajit : { ...room.profiles.dibya, name: guestName || room.profiles.dibya.name };
+  const receiver = isOwner || isLegacyRoom ? "dibya" : "biswajit";
   const theme = themes[room.theme];
-  const roomUrl = typeof window === "undefined" ? "" : window.location.href;
+  const roomUrl = typeof window === "undefined" ? "" : `${window.location.origin}/?room=${roomId}`;
+  const canManageRoom = isOwner || isLegacyRoom;
 
   useEffect(() => {
     document.documentElement.style.setProperty("--theme-primary", theme.primary);
     document.documentElement.style.setProperty("--theme-secondary", theme.secondary);
     document.documentElement.style.setProperty("--theme-bg", theme.bg);
   }, [theme]);
+
+  useEffect(() => {
+    if (!auth) return;
+    return onAuthStateChanged(auth, setUser);
+  }, []);
+
+  useEffect(() => {
+    const saved = localStorage.getItem(`guest-name:${roomId}`);
+    setGuestName(saved || "");
+  }, [roomId]);
 
   useEffect(() => {
     if (!hasFirebaseConfig || !db) {
@@ -87,10 +108,11 @@ export function LoveRoom({ roomId }: Props) {
     });
 
     const messagesRef = collection(db, "rooms", roomId, "messages");
-    const q = query(messagesRef, orderBy("createdAt", "asc"), limit(100));
+    const q = query(messagesRef, orderBy("createdAt", "desc"), limit(30));
     const unsubMessages = onSnapshot(q, (snap) => {
-      setMessages(
-        snap.docs.map((item) => {
+      setOlderCursor(snap.docs.length === 30 ? snap.docs.at(-1) ?? null : null);
+      const latest = snap.docs
+        .map((item) => {
           const data = item.data();
           return {
             id: item.id,
@@ -102,7 +124,8 @@ export function LoveRoom({ roomId }: Props) {
             createdAt: data.createdAt?.toMillis?.() ?? Date.now()
           } as LoveMessage;
         })
-      );
+        .reverse();
+      setMessages((current) => mergeMessages(current.filter((item) => !latest.some((next) => next.id === item.id)), latest));
     });
 
     return () => {
@@ -110,6 +133,12 @@ export function LoveRoom({ roomId }: Props) {
       unsubMessages();
     };
   }, [roomId]);
+
+  useEffect(() => {
+    if (!cameraOpen || !streamRef.current || !videoRef.current) return;
+    videoRef.current.srcObject = streamRef.current;
+    videoRef.current.play().catch(() => undefined);
+  }, [cameraOpen]);
 
   useEffect(() => {
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: "smooth" });
@@ -133,6 +162,7 @@ export function LoveRoom({ roomId }: Props) {
   }
 
   async function sendMessage(input: Omit<LoveMessage, "id" | "roomId" | "sender" | "createdAt">) {
+    if (!currentProfile.name.trim()) return;
     const message: LoveMessage = {
       id: crypto.randomUUID(),
       roomId,
@@ -164,6 +194,7 @@ export function LoveRoom({ roomId }: Props) {
   }
 
   async function updateProfile(person: "biswajit" | "dibya", field: keyof Profile, value: string) {
+    if (!canManageRoom) return;
     const nextRoom = {
       ...room,
       profiles: {
@@ -193,9 +224,6 @@ export function LoveRoom({ roomId }: Props) {
     const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
     streamRef.current = stream;
     setCameraOpen(true);
-    window.setTimeout(() => {
-      if (videoRef.current) videoRef.current.srcObject = stream;
-    }, 0);
   }
 
   function stopCamera() {
@@ -206,16 +234,42 @@ export function LoveRoom({ roomId }: Props) {
 
   async function captureSnap() {
     const video = videoRef.current;
-    if (!video) return;
+    if (!video || video.readyState < 2) return;
     const canvas = document.createElement("canvas");
-    const size = fitSize(video.videoWidth || 720, video.videoHeight || 960, 520);
+    const size = fitSize(video.videoWidth || 720, video.videoHeight || 960, 380);
     canvas.width = size.width;
     canvas.height = size.height;
     const context = canvas.getContext("2d");
     context?.drawImage(video, 0, 0, canvas.width, canvas.height);
-    const mediaUrl = canvas.toDataURL("image/jpeg", 0.62);
+    const mediaUrl = canvas.toDataURL("image/jpeg", 0.55);
     await sendMessage({ kind: "snap", text: "A fresh camera snap, sent with love.", mediaUrl });
     stopCamera();
+  }
+
+  async function loadOlderMessages() {
+    if (!db || !olderCursor) return;
+    setLoadingOlder(true);
+    try {
+      const older = await getDocs(query(collection(db, "rooms", roomId, "messages"), orderBy("createdAt", "desc"), startAfter(olderCursor), limit(30)));
+      setOlderCursor(older.docs.length === 30 ? older.docs.at(-1) ?? null : null);
+      const items = older.docs
+        .map((item) => {
+          const data = item.data();
+          return {
+            id: item.id,
+            roomId,
+            sender: data.sender,
+            kind: data.kind,
+            text: data.text,
+            mediaUrl: data.mediaUrl,
+            createdAt: data.createdAt?.toMillis?.() ?? Date.now()
+          } as LoveMessage;
+        })
+        .reverse();
+      setMessages((current) => mergeMessages(items, current));
+    } finally {
+      setLoadingOlder(false);
+    }
   }
 
   async function handlePhoto(event: ChangeEvent<HTMLInputElement>) {
@@ -278,8 +332,8 @@ export function LoveRoom({ roomId }: Props) {
   }
 
   return (
-    <main className="min-h-screen px-4 py-4 sm:px-6 lg:px-8">
-      <section className="mx-auto grid max-w-7xl gap-4 lg:grid-cols-[340px_1fr_320px]">
+    <main className="min-h-screen px-3 py-3 sm:px-5 lg:px-6">
+      <section className="mx-auto grid max-w-7xl gap-3 lg:h-[calc(100vh-1.5rem)] lg:grid-cols-[300px_minmax(0,1fr)_290px]">
         <aside className="space-y-4">
           <div className="glass rounded-lg p-5 shadow-soft">
             <div className="flex items-start justify-between gap-3">
@@ -290,24 +344,45 @@ export function LoveRoom({ roomId }: Props) {
               <Heart className="h-8 w-8 fill-[color:var(--theme-primary)] text-[color:var(--theme-primary)]" />
             </div>
             <p className="mt-3 text-sm leading-6 text-ink/70">{roomIntro}</p>
-            <button
-              onClick={copyLink}
-              className="mt-4 flex w-full items-center justify-center gap-2 rounded-md bg-ink px-4 py-3 text-sm font-bold text-white"
-            >
-              <Copy className="h-4 w-4" />
-              {copied ? "Link copied" : "Copy invite link"}
-            </button>
+            <div className="mt-4 grid gap-2">
+              {onBack ? (
+                <button onClick={onBack} className="rounded-md border border-ink/10 bg-white px-4 py-3 text-sm font-bold text-ink">
+                  My rooms
+                </button>
+              ) : null}
+              <button onClick={copyLink} className="flex w-full items-center justify-center gap-2 rounded-md bg-ink px-4 py-3 text-sm font-bold text-white">
+                <Copy className="h-4 w-4" />
+                {copied ? "Link copied" : "Copy invite link"}
+              </button>
+            </div>
             <p className="mt-3 text-xs leading-5 text-ink/55">
               No login is used. Anyone with this link can join, so keep the link private.
             </p>
           </div>
 
-          <ProfileCard title="Biswajit" profile={room.profiles.biswajit} onChange={(field, value) => updateProfile("biswajit", field, value)} />
-          <ProfileCard title="Dibya" profile={room.profiles.dibya} onChange={(field, value) => updateProfile("dibya", field, value)} />
+          {canManageRoom ? (
+            <>
+              <ProfileCard title="Your" profile={room.profiles.biswajit} onChange={(field, value) => updateProfile("biswajit", field, value)} />
+              <ProfileCard title="Guest" profile={room.profiles.dibya} onChange={(field, value) => updateProfile("dibya", field, value)} />
+            </>
+          ) : (
+            <div className="glass rounded-lg p-4 shadow-soft">
+              <p className="mb-2 text-sm font-black text-ink">Join as</p>
+              <input
+                value={guestName}
+                onChange={(event) => {
+                  setGuestName(event.target.value);
+                  localStorage.setItem(`guest-name:${roomId}`, event.target.value);
+                }}
+                className="w-full rounded-md border border-ink/10 bg-white px-3 py-3 text-sm font-bold text-ink"
+                placeholder="Your name"
+              />
+            </div>
+          )}
         </aside>
 
-        <section className="glass flex min-h-[82vh] flex-col rounded-lg shadow-soft">
-          <div className="border-b border-ink/10 p-4">
+        <section className="glass flex min-h-[76vh] min-w-0 flex-col overflow-hidden rounded-lg shadow-soft lg:h-full">
+          <div className="shrink-0 border-b border-ink/10 p-4">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <div>
                 <p className="flex items-center gap-2 text-sm font-bold text-[color:var(--theme-primary)]">
@@ -322,7 +397,14 @@ export function LoveRoom({ roomId }: Props) {
             </div>
           </div>
 
-          <div ref={listRef} className="no-scrollbar flex-1 space-y-3 overflow-y-auto p-4">
+          <div ref={listRef} className="no-scrollbar min-h-0 flex-1 space-y-3 overflow-y-auto p-4">
+            {olderCursor ? (
+              <div className="flex justify-center">
+                <button onClick={loadOlderMessages} className="rounded-full border border-ink/10 bg-white px-4 py-2 text-xs font-bold text-ink">
+                  {loadingOlder ? "Loading..." : "Load older"}
+                </button>
+              </div>
+            ) : null}
             {messages.length === 0 ? (
               <div className="flex h-full min-h-[24rem] flex-col items-center justify-center text-center">
                 <Gift className="h-12 w-12 text-[color:var(--theme-primary)]" />
@@ -336,7 +418,7 @@ export function LoveRoom({ roomId }: Props) {
             )}
           </div>
 
-          <div className="border-t border-ink/10 p-4">
+          <div className="shrink-0 border-t border-ink/10 p-3 sm:p-4">
             <div className="mb-3 flex gap-2 overflow-x-auto pb-1">
               {quickNotes.map((note) => (
                 <button
@@ -362,25 +444,14 @@ export function LoveRoom({ roomId }: Props) {
           </div>
         </section>
 
-        <aside className="space-y-4">
+        <aside className="space-y-3 overflow-y-auto">
           <div className="glass rounded-lg p-4 shadow-soft">
             <p className="mb-3 flex items-center gap-2 text-sm font-black text-ink">
               <UserRound className="h-4 w-4" />
-              Send as
+              You are chatting as
             </p>
-            <div className="grid grid-cols-2 gap-2">
-              {(["biswajit", "dibya"] as const).map((person) => (
-                <button
-                  key={person}
-                  onClick={() => setSender(person)}
-                  className={`rounded-md px-3 py-3 text-sm font-bold ${
-                    sender === person ? "bg-ink text-white" : "border border-ink/10 bg-white/70 text-ink"
-                  }`}
-                >
-                  {room.profiles[person].name}
-                </button>
-              ))}
-            </div>
+            <p className="rounded-md bg-white px-3 py-3 text-sm font-black text-ink">{currentProfile.name || "Guest"}</p>
+            {!canManageRoom ? <p className="mt-2 text-xs leading-5 text-ink/55">Location and device info are shared only if you tap the buttons below.</p> : null}
           </div>
 
           <div className="glass rounded-lg p-4 shadow-soft">
@@ -487,6 +558,10 @@ function fitSize(width: number, height: number, maxSide: number) {
   };
 }
 
+function mergeMessages(left: LoveMessage[], right: LoveMessage[]) {
+  return Array.from(new Map([...left, ...right].map((message) => [message.id, message])).values()).sort((a, b) => a.createdAt - b.createdAt);
+}
+
 function compressImageFile(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -495,12 +570,12 @@ function compressImageFile(file: File): Promise<string> {
       const image = new window.Image();
       image.onerror = () => reject(new Error("Could not load image"));
       image.onload = () => {
-        const size = fitSize(image.width, image.height, 640);
+        const size = fitSize(image.width, image.height, 420);
         const canvas = document.createElement("canvas");
         canvas.width = size.width;
         canvas.height = size.height;
         canvas.getContext("2d")?.drawImage(image, 0, 0, size.width, size.height);
-        resolve(canvas.toDataURL("image/jpeg", 0.62));
+        resolve(canvas.toDataURL("image/jpeg", 0.55));
       };
       image.src = String(reader.result);
     };
