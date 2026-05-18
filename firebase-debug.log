@@ -1,0 +1,16 @@
+[debug] [2026-05-18T08:27:07.381Z] ----------------------------------------------------------------------
+[debug] [2026-05-18T08:27:07.383Z] Command:       C:\Program Files\nodejs\node.exe C:\Users\biswa\AppData\Roaming\npm\node_modules\firebase-tools\lib\bin\firebase.js deploy --only hosting,firestore:rules,storage --project love-room-48927
+[debug] [2026-05-18T08:27:07.383Z] CLI Version:   15.11.0
+[debug] [2026-05-18T08:27:07.383Z] Platform:      win32
+[debug] [2026-05-18T08:27:07.384Z] Node Version:  v24.11.1
+[debug] [2026-05-18T08:27:07.384Z] Time:          Mon May 18 2026 13:57:07 GMT+0530 (India Standard Time)
+[debug] [2026-05-18T08:27:07.384Z] ----------------------------------------------------------------------
+[debug] 
+[debug] [2026-05-18T08:27:09.180Z] > command requires scopes: ["email","openid","https://www.googleapis.com/auth/cloudplatformprojects.readonly","https://www.googleapis.com/auth/firebase","https://www.googleapis.com/auth/cloud-platform"]
+[debug] [2026-05-18T08:27:09.180Z] > authorizing via signed-in user (balaranidas052@gmail.com)
+[debug] [2026-05-18T08:27:09.180Z] [iam] checking project love-room-48927 for permissions ["datastore.indexes.create","datastore.indexes.delete","datastore.indexes.list","datastore.indexes.update","firebase.projects.get","firebasehosting.sites.update","firebaserules.releases.create","firebaserules.releases.update","firebaserules.rulesets.create"]
+[debug] [2026-05-18T08:27:09.181Z] Checked if tokens are valid: true, expires at: 1779096396949
+[debug] [2026-05-18T08:27:09.181Z] Checked if tokens are valid: true, expires at: 1779096396949
+[debug] [2026-05-18T08:27:09.182Z] >>> [apiv2][query] POST https://cloudresourcemanager.googleapis.com/v1/projects/love-room-48927:testIamPermissions [none]
+[debug] [2026-05-18T08:27:09.182Z] >>> [apiv2][(partial)header] POST https://cloudresourcemanager.googleapis.com/v1/projects/love-room-48927:testIamPermissions  x-goog-user-project=love-room-48927
+[debug] [2026-05-18T08:27:09.182Z] >>> [apiv2][body] POST https://cloudresourcemanager.googleapis.com/v1/projects/love-room-48927:testIamPermissions {"permissions":["datastore.indexes.create","datastore.indexes.delete","datastore.indexes.list","datastore.indexes.update","firebase.projects.get","firebasehosting.sites.update","firebaserules.releases.create","firebaserules.releases.update","firebaserules.rulesets.create"]}

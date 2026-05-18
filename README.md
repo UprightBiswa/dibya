@@ -28,6 +28,25 @@ The current rules are open because you asked for no login. That keeps sharing si
 
 The package versions are pinned so Vercel and your laptop use the same dependency graph. You can upgrade them later with `npm update` after the first deploy is stable.
 
+## Deploy to Firebase Hosting
+
+Firebase Hosting can host this Next.js app too. Run these from this folder:
+
+```bash
+npm install -g firebase-tools
+firebase login
+firebase experiments:enable webframeworks
+firebase init hosting
+```
+
+Choose your Firebase project, answer **yes** to using a web framework, choose **Next.js** if asked, and keep this folder as the source directory. After init, deploy:
+
+```bash
+firebase deploy
+```
+
+If Firebase creates `.firebaserc`, make sure the project id matches your Firebase project. See `.firebaserc.example`.
+
 ## Deploy to Vercel
 
 1. Push this folder to GitHub.
