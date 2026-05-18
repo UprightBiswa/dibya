@@ -1,5 +1,3 @@
-import { LoveRoom } from "@/components/love-room";
-
 type PageProps = {
   params: Promise<{ roomId: string }>;
 };
@@ -10,5 +8,13 @@ export function generateStaticParams() {
 
 export default async function RoomPage({ params }: PageProps) {
   const { roomId } = await params;
-  return <LoveRoom roomId={roomId} />;
+  const target = `/?room=${encodeURIComponent(roomId)}`;
+  return (
+    <main className="flex min-h-screen items-center justify-center p-6">
+      <meta httpEquiv="refresh" content={`0;url=${target}`} />
+      <a href={target} className="rounded-md bg-ink px-5 py-3 text-sm font-bold text-white">
+        Open chat in dashboard
+      </a>
+    </main>
+  );
 }

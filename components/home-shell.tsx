@@ -510,7 +510,7 @@ export function HomeShell() {
 
         {selectedRoomId ? (
           <section className="min-h-[calc(100vh-1.5rem)] min-w-0">
-            <LoveRoom roomId={selectedRoomId} embedded onBack={() => setSelectedRoomId("")} />
+            <LoveRoom key={selectedRoomId} roomId={selectedRoomId} embedded onBack={() => setSelectedRoomId("")} />
           </section>
         ) : (
         <section className="hidden overflow-hidden rounded-lg bg-ink text-white shadow-soft lg:block">

@@ -2,7 +2,6 @@
 
 import { ChangeEvent, FormEvent, useEffect, useRef, useState } from "react";
 import Image from "next/image";
-import Link from "next/link";
 import { GoogleAuthProvider, onAuthStateChanged, signInWithPopup, type User } from "firebase/auth";
 import {
   Camera,
@@ -76,6 +75,7 @@ export function LoveRoom({ roomId, onBack, embedded = false }: Props) {
   const streamRef = useRef<MediaStream | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const clientIdRef = useRef("");
+  const activeRoomRef = useRef(roomId);
   const { setSelectedTheme, playTone } = useAppStore();
 
   const isOwner = Boolean(user && room.ownerUid && user.uid === room.ownerUid);
@@ -90,6 +90,7 @@ export function LoveRoom({ roomId, onBack, embedded = false }: Props) {
   const myScore = room.gameScore?.[actorId] ?? 0;
   const otherId = isOwner ? room.peerUid : room.ownerUid;
   const otherScore = otherId ? room.gameScore?.[otherId] ?? 0 : 0;
+  const visibleMessages = messages.filter((message) => message.roomId === roomId);
 
   useEffect(() => {
     document.documentElement.style.setProperty("--theme-primary", theme.primary);
@@ -117,6 +118,7 @@ export function LoveRoom({ roomId, onBack, embedded = false }: Props) {
   }, [roomId]);
 
   useEffect(() => {
+    activeRoomRef.current = roomId;
     setRoom({ ...defaultRoom, id: roomId });
     setMessages([]);
     setParticipants([]);
@@ -145,6 +147,7 @@ export function LoveRoom({ roomId, onBack, embedded = false }: Props) {
     const unsubRoom = onSnapshot(
       roomRef,
       (snap) => {
+        if (activeRoomRef.current !== roomId) return;
         if (snap.exists()) setRoom(snap.data() as SharedRoom);
         setIsReady(true);
       },
@@ -159,6 +162,7 @@ export function LoveRoom({ roomId, onBack, embedded = false }: Props) {
     const unsubMessages = onSnapshot(
       q,
       (snap) => {
+        if (activeRoomRef.current !== roomId) return;
         setOlderCursor(snap.docs.length === 30 ? snap.docs.at(-1) ?? null : null);
         const latest = snap.docs
           .map((item) => {
@@ -185,6 +189,7 @@ export function LoveRoom({ roomId, onBack, embedded = false }: Props) {
     const unsubParticipants = onSnapshot(
       collection(db, "rooms", roomId, "participants"),
       (snap) => {
+        if (activeRoomRef.current !== roomId) return;
         setParticipants(snap.docs.map((item) => ({ id: item.id, ...item.data() }) as Participant));
       },
       (error) => setAuthError(error.message)
@@ -220,7 +225,7 @@ export function LoveRoom({ roomId, onBack, embedded = false }: Props) {
 
   useEffect(() => {
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: "smooth" });
-  }, [messages]);
+  }, [visibleMessages]);
 
   useEffect(() => {
     return () => stopCamera();
@@ -334,16 +339,16 @@ export function LoveRoom({ roomId, onBack, embedded = false }: Props) {
   }
 
   async function editMessage(message: LoveMessage, nextText: string) {
-    if (!db || !nextText.trim()) return;
-    await setDoc(
-      doc(db, "rooms", roomId, "messages", message.id),
-      { text: nextText.trim(), edited: true, updatedAt: serverTimestamp(), senderId: message.senderId ?? "", ownerUid: message.ownerUid ?? "" },
-      { merge: true }
-    );
+    if (!db || !user || !nextText.trim() || message.roomId !== roomId || message.senderId !== user.uid) return;
+    await updateDoc(doc(db, "rooms", roomId, "messages", message.id), {
+      text: nextText.trim(),
+      edited: true,
+      updatedAt: serverTimestamp()
+    });
   }
 
   async function deleteMessage(message: LoveMessage) {
-    if (!db) return;
+    if (!db || !user || message.roomId !== roomId || message.senderId !== user.uid) return;
     await deleteDoc(doc(db, "rooms", roomId, "messages", message.id));
   }
 
@@ -567,21 +572,21 @@ export function LoveRoom({ roomId, onBack, embedded = false }: Props) {
             ) : null}
           </div>
           {user ? (
-              <div className="no-scrollbar min-h-0 flex-1 space-y-2 overflow-y-auto">
-                {chatRooms.map((item) => {
-                  const profile = item.peerUid === user.uid ? item.profiles.owner : item.profiles.peer;
-                  return (
-                    <Link key={item.id} href={`/?room=${item.id}`} className={`flex items-center gap-3 rounded-md p-3 ${item.id === roomId ? "bg-ink text-white" : "bg-white/75 text-ink"}`}>
-                      <Avatar name={profile.name} photoUrl={profile.photoUrl} />
-                      <div className="min-w-0 flex-1">
-                        <p className="truncate text-sm font-black">{profile.name}</p>
-                        <p className={`truncate text-xs ${item.id === roomId ? "text-white/60" : "text-ink/55"}`}>{item.lastMessage || "Open chat"}</p>
-                      </div>
-                    </Link>
-                  );
-                })}
-                {chatRooms.length === 0 ? <p className="rounded-md bg-white/70 p-3 text-xs leading-5 text-ink/55">No connected chats yet.</p> : null}
-              </div>
+            <div className="no-scrollbar min-h-0 flex-1 space-y-2 overflow-y-auto">
+              {chatRooms.map((item) => {
+                const profile = item.peerUid === user.uid ? item.profiles.owner : item.profiles.peer;
+                return (
+                  <a key={item.id} href={`/?room=${item.id}`} className={`flex items-center gap-3 rounded-md p-3 ${item.id === roomId ? "bg-ink text-white" : "bg-white/75 text-ink"}`}>
+                    <Avatar name={profile.name} photoUrl={profile.photoUrl} />
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-black">{profile.name}</p>
+                      <p className={`truncate text-xs ${item.id === roomId ? "text-white/60" : "text-ink/55"}`}>{item.lastMessage || "Open chat"}</p>
+                    </div>
+                  </a>
+                );
+              })}
+              {chatRooms.length === 0 ? <p className="rounded-md bg-white/70 p-3 text-xs leading-5 text-ink/55">No connected chats yet.</p> : null}
+            </div>
           ) : null}
         </aside>
         ) : null}
@@ -614,7 +619,7 @@ export function LoveRoom({ roomId, onBack, embedded = false }: Props) {
                 </button>
               </div>
             ) : null}
-            {messages.length === 0 ? (
+            {visibleMessages.length === 0 ? (
               <div className="flex h-full min-h-[24rem] flex-col items-center justify-center text-center">
                 <Gift className="h-12 w-12 text-[color:var(--theme-primary)]" />
                 <h2 className="mt-3 text-2xl font-black text-ink">Start with a soft hello</h2>
@@ -623,12 +628,12 @@ export function LoveRoom({ roomId, onBack, embedded = false }: Props) {
                 </p>
               </div>
             ) : (
-              messages.map((message) => (
+              visibleMessages.map((message) => (
                 <MessageBubble
                   key={message.id}
                   message={message}
                   mine={message.senderId === actorId}
-                  canEdit={message.senderId === actorId}
+                  canEdit={Boolean(user && message.senderId === user.uid)}
                   onEdit={editMessage}
                   onDelete={deleteMessage}
                 />
