@@ -71,9 +71,10 @@ export function LoveRoom({ roomId, onBack }: Props) {
   const clientIdRef = useRef("");
 
   const isOwner = Boolean(user && room.ownerUid && user.uid === room.ownerUid);
+  const isPeer = Boolean(user && room.peerUid && user.uid === room.peerUid);
   const isLegacyRoom = !room.ownerUid;
-  const currentProfile = isOwner || isLegacyRoom ? room.profiles.biswajit : { ...room.profiles.dibya, name: guestName || room.profiles.dibya.name };
-  const receiver = isOwner || isLegacyRoom ? "dibya" : "biswajit";
+  const currentProfile = isOwner || isLegacyRoom ? room.profiles.owner : isPeer ? room.profiles.peer : { ...room.profiles.peer, name: guestName || room.profiles.peer.name };
+  const receiver = isOwner || isLegacyRoom ? "peer" : "owner";
   const theme = themes[room.theme];
   const roomUrl = typeof window === "undefined" ? "" : `${window.location.origin}/?room=${roomId}`;
   const canManageRoom = isOwner || isLegacyRoom;
@@ -169,7 +170,7 @@ export function LoveRoom({ roomId, onBack }: Props) {
   }, []);
 
   const roomIntro = useMemo(() => {
-    return `${room.profiles.dibya.name} is a ${room.profiles.dibya.role.toLowerCase()}, loved by ${room.profiles.biswajit.name}.`;
+    return `${room.profiles.owner.name} and ${room.profiles.peer.name} share this private room.`;
   }, [room.profiles]);
 
   async function saveRoom(nextRoom: SharedRoom) {
@@ -231,7 +232,7 @@ export function LoveRoom({ roomId, onBack }: Props) {
     await deleteDoc(doc(db, "rooms", roomId, "messages", message.id));
   }
 
-  async function updateProfile(person: "biswajit" | "dibya", field: keyof Profile, value: string) {
+  async function updateProfile(person: "owner" | "peer", field: keyof Profile, value: string) {
     if (!canManageRoom) return;
     const nextRoom = {
       ...room,
@@ -399,7 +400,7 @@ export function LoveRoom({ roomId, onBack }: Props) {
             <div className="flex items-start justify-between gap-3">
               <div>
                 <p className="text-xs font-bold uppercase tracking-wider text-[color:var(--theme-secondary)]">Private chat room</p>
-                <h1 className="mt-1 text-3xl font-black text-ink">{room.partnerName || room.profiles.dibya.name}</h1>
+                <h1 className="mt-1 text-3xl font-black text-ink">{room.partnerName || room.profiles.peer.name}</h1>
               </div>
               <Heart className="h-8 w-8 fill-[color:var(--theme-primary)] text-[color:var(--theme-primary)]" />
             </div>
@@ -422,10 +423,10 @@ export function LoveRoom({ roomId, onBack }: Props) {
 
           {canManageRoom ? (
             <>
-              <ProfileCard title="Your" profile={room.profiles.biswajit} onChange={(field, value) => updateProfile("biswajit", field, value)} />
-              <ProfileCard title="Guest" profile={room.profiles.dibya} onChange={(field, value) => updateProfile("dibya", field, value)} />
+              <ProfileCard title="Your" profile={room.profiles.owner} onChange={(field, value) => updateProfile("owner", field, value)} />
+              <ProfileCard title="Guest" profile={room.profiles.peer} onChange={(field, value) => updateProfile("peer", field, value)} />
             </>
-          ) : (
+          ) : isPeer ? null : (
             <div className="glass rounded-lg p-4 shadow-soft">
               <p className="mb-2 text-sm font-black text-ink">Join as</p>
               <input

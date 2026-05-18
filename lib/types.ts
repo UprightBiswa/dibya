@@ -14,18 +14,40 @@ export type Participant = Profile & {
   deviceText?: string;
 };
 
+export type AppUser = Profile & {
+  uid: string;
+  email: string;
+  username: string;
+  usernameLower: string;
+  displayName: string;
+  createdAt?: number;
+};
+
+export type ChatInvite = {
+  id: string;
+  fromUid: string;
+  fromName: string;
+  toUid: string;
+  toName: string;
+  status: "pending" | "accepted" | "declined";
+  roomId?: string;
+  createdAt: number;
+};
+
 export type SharedRoom = {
   id: string;
   ownerUid?: string;
   ownerEmail?: string;
+  peerUid?: string;
+  participantUids?: string[];
   partnerName?: string;
   deleted?: boolean;
   createdAt?: number;
   theme: ThemeName;
   quoteOfDay: string;
   profiles: {
-    biswajit: Profile;
-    dibya: Profile;
+    owner: Profile;
+    peer: Profile;
   };
 };
 

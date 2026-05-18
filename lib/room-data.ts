@@ -25,20 +25,20 @@ export const gifts = [
 ];
 
 export const defaultRoom: SharedRoom = {
-  id: "dibya-biswajit",
+  id: "private-room",
   theme: "rose",
   quoteOfDay: loveQuotes[0],
   profiles: {
-    biswajit: {
-      name: "Biswajit Das",
-      role: "Her daily love partner",
-      bio: "Sending Dibya care, flowers, photos, and soft words every day.",
+    owner: {
+      name: "You",
+      role: "Room owner",
+      bio: "Create a private room and share thoughtful messages.",
       photoUrl: ""
     },
-    dibya: {
-      name: "Dibya",
-      role: "Nurse and family strength",
-      bio: "A caring nurse doing great work for people and for her family.",
+    peer: {
+      name: "Friend",
+      role: "Invited person",
+      bio: "A private space for chat, care, and shared moments.",
       photoUrl: ""
     }
   }

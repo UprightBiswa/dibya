@@ -5,7 +5,7 @@ type PageProps = {
 };
 
 export function generateStaticParams() {
-  return [{ roomId: "dibya-biswajit" }];
+  return [{ roomId: "private-room" }];
 }
 
 export default async function RoomPage({ params }: PageProps) {
