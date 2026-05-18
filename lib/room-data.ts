@@ -8,20 +8,20 @@ export const themes: Record<ThemeName, { label: string; primary: string; seconda
 };
 
 export const loveQuotes = [
-  "Every small message from you makes the day softer.",
-  "Proud of your brave nurse heart and the way you care for your family.",
-  "My favorite place is any moment where we are laughing together.",
-  "You make ordinary days feel like a celebration.",
-  "A little flower for your tired day, and a big thank you for your love."
+  "A small message can make a long day feel lighter.",
+  "Good people deserve soft places to talk and feel seen.",
+  "Shared laughter turns an ordinary chat into a memory.",
+  "Care shows up in the little replies, photos, and check-ins.",
+  "Send something kind. It may be exactly what the other person needs."
 ];
 
 export const gifts = [
-  { icon: "💐", label: "Bouquet", text: "A fresh bouquet for your caring heart." },
-  { icon: "🧸", label: "Teddy", text: "A soft teddy hug for you." },
-  { icon: "🍫", label: "Chocolate", text: "Sweet chocolate for a sweeter smile." },
-  { icon: "💌", label: "Love Note", text: "A secret note: you are deeply loved." },
-  { icon: "🌙", label: "Good Night", text: "Sleep softly, my favorite person." },
-  { icon: "☀️", label: "Good Morning", text: "Good morning, beautiful soul." }
+  { icon: "\uD83D\uDC90", label: "Bouquet", text: "A fresh bouquet for your day." },
+  { icon: "\uD83E\uDDF8", label: "Teddy", text: "A soft teddy hug for you." },
+  { icon: "\uD83C\uDF6B", label: "Chocolate", text: "Sweet chocolate for a sweeter smile." },
+  { icon: "\uD83D\uDC8C", label: "Note", text: "A private note: you matter here." },
+  { icon: "\uD83C\uDF19", label: "Good night", text: "Sleep softly and rest well." },
+  { icon: "\u2600\uFE0F", label: "Good morning", text: "Good morning. Wishing you a bright day." }
 ];
 
 export const defaultRoom: SharedRoom = {

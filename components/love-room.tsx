@@ -48,7 +48,7 @@ type Props = {
   onBack?: () => void;
 };
 
-const quickNotes = ["I miss you", "Proud of you", "Drink water", "Rest a little", "Sending a hug"];
+const quickNotes = ["Thinking of you", "Proud of you", "Drink water", "Rest a little", "Sending a hug"];
 
 export function LoveRoom({ roomId, onBack }: Props) {
   const [room, setRoom] = useState<SharedRoom>({ ...defaultRoom, id: roomId });
@@ -170,7 +170,7 @@ export function LoveRoom({ roomId, onBack }: Props) {
   }, []);
 
   const roomIntro = useMemo(() => {
-    return `${room.profiles.owner.name} and ${room.profiles.peer.name} share this private room.`;
+    return `${room.profiles.owner.name} and ${room.profiles.peer.name} share this private chat.`;
   }, [room.profiles]);
 
   async function saveRoom(nextRoom: SharedRoom) {
@@ -281,7 +281,7 @@ export function LoveRoom({ roomId, onBack }: Props) {
     const context = canvas.getContext("2d");
     context?.drawImage(video, 0, 0, canvas.width, canvas.height);
     const mediaUrl = canvas.toDataURL("image/jpeg", 0.55);
-    await sendMessage({ kind: "snap", text: "A fresh camera snap, sent with love.", mediaUrl });
+    await sendMessage({ kind: "snap", text: "A fresh camera snap.", mediaUrl });
     stopCamera();
   }
 
@@ -399,7 +399,7 @@ export function LoveRoom({ roomId, onBack }: Props) {
           <div className="glass rounded-lg p-5 shadow-soft">
             <div className="flex items-start justify-between gap-3">
               <div>
-                <p className="text-xs font-bold uppercase tracking-wider text-[color:var(--theme-secondary)]">Private chat room</p>
+                <p className="text-xs font-bold uppercase tracking-wider text-[color:var(--theme-secondary)]">Private chat</p>
                 <h1 className="mt-1 text-3xl font-black text-ink">{room.partnerName || room.profiles.peer.name}</h1>
               </div>
               <Heart className="h-8 w-8 fill-[color:var(--theme-primary)] text-[color:var(--theme-primary)]" />
@@ -417,7 +417,7 @@ export function LoveRoom({ roomId, onBack }: Props) {
               </button>
             </div>
             <p className="mt-3 text-xs leading-5 text-ink/55">
-              No login is used. Anyone with this link can join, so keep the link private.
+              Anyone with this link can open the room, so share it only with the right person.
             </p>
           </div>
 
@@ -469,12 +469,12 @@ export function LoveRoom({ roomId, onBack }: Props) {
               <div>
                 <p className="flex items-center gap-2 text-sm font-bold text-[color:var(--theme-primary)]">
                   <Sparkles className="h-4 w-4" />
-                  Quote of the day
+                  Room prompt
                 </p>
                 <p className="mt-1 text-lg font-bold leading-7 text-ink">{room.quoteOfDay}</p>
               </div>
               <button onClick={changeQuote} className="rounded-md border border-ink/15 px-4 py-2 text-sm font-bold text-ink">
-                New quote
+                  New prompt
               </button>
             </div>
           </div>
@@ -492,7 +492,7 @@ export function LoveRoom({ roomId, onBack }: Props) {
                 <Gift className="h-12 w-12 text-[color:var(--theme-primary)]" />
                 <h2 className="mt-3 text-2xl font-black text-ink">Start with a soft hello</h2>
                 <p className="mt-2 max-w-sm text-sm leading-6 text-ink/60">
-                  Send a quote, flower, snap, or caring note. The room will feel alive as both of you use it.
+                  Send a note, reaction, photo, snap, or caring check-in. The room will feel alive as both of you use it.
                 </p>
               </div>
             ) : (
@@ -548,7 +548,7 @@ export function LoveRoom({ roomId, onBack }: Props) {
           <div className="glass rounded-lg p-4 shadow-soft">
             <p className="mb-3 flex items-center gap-2 text-sm font-black text-ink">
               <Gift className="h-4 w-4" />
-              Love gifts
+              Reactions and gifts
             </p>
             <div className="grid grid-cols-2 gap-2">
               {gifts.map((gift) => (
@@ -614,7 +614,7 @@ export function LoveRoom({ roomId, onBack }: Props) {
           <div className="glass rounded-lg p-4 shadow-soft">
             <p className="mb-3 text-sm font-black text-ink">Mini game</p>
             <button
-              onClick={() => sendMessage({ kind: "game", text: `${currentProfile.name} tapped the heart game. +1 love point.` })}
+              onClick={() => sendMessage({ kind: "game", text: `${currentProfile.name} tapped the room game. +1 point.` })}
               className="flex w-full items-center justify-center gap-2 rounded-md bg-[color:var(--theme-primary)] px-3 py-3 text-sm font-bold text-white"
             >
               <Heart className="h-4 w-4 fill-white" />

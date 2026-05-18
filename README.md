@@ -1,69 +1,58 @@
-# Dibya Love Room
+# HeartLink
 
-A private Next.js room for Dibya and Biswajit with realtime chat, gifts, love quotes, compressed photo sharing, camera snaps, editable profiles, theme changes, and consent-only location/device sharing.
+HeartLink is a private social chat app built with Next.js and Firebase.
 
-## Run locally
+## Features
+
+- Google login for account owners
+- Public user profiles with username, name, bio, and photo URL
+- User discovery and username search
+- Chat requests with accept and deny actions
+- Shared 1:1 chat rooms after a request is accepted
+- Realtime Firestore messages
+- Edit and delete messages
+- Compressed photo upload and camera snaps stored in Firestore
+- Reactions, gifts, room prompts, themes, and a small tap game
+- Consent-only location and device sharing
+
+## Firebase Setup
+
+Create a Firebase project, then enable:
+
+- Authentication: Google provider
+- Firestore Database
+- Firebase Hosting
+
+Firebase Storage is not required. Photos are compressed in the browser and saved as small Firestore message data URLs.
+
+Create `.env.local` from `.env.example` and fill in your Firebase web app config.
+
+## Development
 
 ```bash
 npm install
 npm run dev
 ```
 
-Open `http://localhost:3000/room/dibya-biswajit`.
+Open `http://localhost:3000`.
 
-Without Firebase keys, the app runs in local demo mode using browser storage. It is good for testing, but only the same browser can see messages.
-
-## Make it realtime for both phones
-
-Use Firebase Spark free tier:
-
-1. Create a Firebase project.
-2. Create a Firestore database.
-3. Skip Firebase Storage if it asks for billing. Photos and snaps are compressed and saved in Firestore messages.
-4. Copy `.env.example` to `.env.local`.
-5. Add your web app Firebase config values.
-6. Publish `firestore.rules` in Firebase console or deploy it with Firebase CLI.
-
-The current rules are open because you asked for no login. That keeps sharing simple, but anyone with the link can read/write. For stronger privacy later, add anonymous auth and invite codes.
-
-The package versions are pinned so Vercel and your laptop use the same dependency graph. You can upgrade them later with `npm update` after the first deploy is stable.
-
-## Deploy to Firebase Hosting
-
-Firebase Hosting can host this Next.js app too. Run these from this folder:
+## Build
 
 ```bash
-npm install -g firebase-tools
+npm run lint
+npm run typecheck
+npm run build
+```
+
+## Deploy To Firebase Hosting
+
+```bash
 firebase login
-firebase experiments:enable webframeworks
-firebase init hosting
+firebase deploy --only "hosting,firestore:rules" --project love-room-48927
 ```
 
-Choose your Firebase project, answer **yes** to using a web framework, choose **Next.js** if asked, and keep this folder as the source directory. After init, deploy:
-
-```bash
-firebase deploy --only "hosting,firestore:rules"
-```
-
-If Firebase creates `.firebaserc`, make sure the project id matches your Firebase project. See `.firebaserc.example`.
-
-## Deploy to Vercel
-
-1. Push this folder to GitHub.
-2. Import the repo in Vercel.
-3. Add the same `NEXT_PUBLIC_FIREBASE_*` environment variables in Vercel project settings.
-4. Deploy.
-
-Your private share URL will look like:
+After deploy, open:
 
 ```text
-https://your-vercel-site.vercel.app/room/dibya-biswajit
+https://love-room-48927.web.app
 ```
-
-## Privacy note
-
-Camera, location, and device details are only sent after someone taps the matching button and accepts browser permission where required. The app does not collect hidden location or hidden device information.
-
-## Storage-free photos
-
-This project does not require Firebase Storage. Uploaded photos and camera snaps are resized and compressed in the browser, then saved inside the chat message document in Firestore. Keep photos small; this is perfect for quick snaps, not a full gallery backup.
